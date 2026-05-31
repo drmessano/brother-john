@@ -48,7 +48,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         ["📅 Daily On", "📅 Daily Off"],
     ],
     resize_keyboard=True,
-    persistent=True,
 )
 
 # ---------------------------------------------------------------------------
