@@ -27,13 +27,36 @@ async def get_available_bibles() -> list[dict]:
     return _bible_cache
 
 
+def _normalize_abbr(abbr: str) -> str:
+    """Strip language prefixes (eng, es, fr, etc.) and trailing digits.
+    e.g. engKJV -> KJV, NIV11 -> NIV, engWEBU -> WEBU
+    """
+    import re
+    abbr = re.sub(r"^[a-z]{2,3}(?=[A-Z])", "", abbr)   # strip lowercase prefix before uppercase
+    abbr = re.sub(r"\d+$", "", abbr)                     # strip trailing digits
+    return abbr.upper()
+
+
 async def find_bible_id(abbreviation: str) -> str | None:
-    """Look up a bible ID by abbreviation (e.g. 'KJV', 'NIV')."""
+    """Look up a bible ID by abbreviation. Normalizes both sides so that
+    e.g. 'KJV' matches 'engKJV' and 'NIV' matches 'NIV11'.
+    Prefers exact match, then normalized match with shortest abbreviation.
+    """
     bibles = await get_available_bibles()
     abbr_upper = abbreviation.upper()
+    normalized = _normalize_abbr(abbreviation)
+
+    # Exact match first
     for b in bibles:
         if b.get("abbreviation", "").upper() == abbr_upper:
             return b["id"]
+
+    # Normalized match
+    matches = [b for b in bibles if _normalize_abbr(b.get("abbreviation", "")) == normalized]
+    if matches:
+        matches.sort(key=lambda b: len(b.get("abbreviation", "")))
+        return matches[0]["id"]
+
     return None
 
 
