@@ -25,7 +25,7 @@ def generate_study_prompt(passage_text: str, reference: str, translation: str) -
     user = f"Passage ({translation}):\n\n{reference}\n\n{passage_text}"
 
     message = client.messages.create(
-        model="claude-opus-4-8",
+        model="claude-haiku-4-5-20251001",
         max_tokens=1024,
         system=system,
         messages=[{"role": "user", "content": user}],
@@ -47,7 +47,7 @@ def generate_daily_passage_and_study(translation: str = "ESV") -> tuple[str, str
     )
 
     selection = client.messages.create(
-        model="claude-opus-4-8",
+        model="claude-haiku-4-5-20251001",
         max_tokens=50,
         system=system,
         messages=[{"role": "user", "content": "Choose today's study passage."}],
