@@ -96,7 +96,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     translation = _get_translation(user_id)
 
     text = (
-        "👋 *Welcome to BibleBot\\!*\n\n"
+        "👋 *Welcome to Brother John\\!*\n\n"
         "I help you dive deep into Scripture with guided study prompts\\.\n\n"
         "*Commands:*\n"
         "• /study — Generate a fresh study passage for today\n"
@@ -295,7 +295,7 @@ def main():
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CallbackQueryHandler(callback_set_translation, pattern=r"^set_translation:"))
 
-    logger.info("BibleBot starting...")
+    logger.info("Brother John starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

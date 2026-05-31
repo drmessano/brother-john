@@ -1,7 +1,7 @@
 import sqlite3
 from contextlib import contextmanager
 
-DB_PATH = "biblebot.db"
+DB_PATH = "brother-john.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
