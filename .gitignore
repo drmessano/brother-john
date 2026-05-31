@@ -1,0 +1,4 @@
+.env
+biblebot.db
+__pycache__/
+*.pyc
