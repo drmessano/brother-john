@@ -20,7 +20,7 @@ import db
 from bible_api import fetch_passage, get_available_bibles
 from study import generate_daily_passage_and_study, generate_study_from_reference
 
-load_dotenv()
+load_dotenv("config")
 
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
 _LOG_DIR = os.getenv("LOG_DIR", "/var/log/brother-john")
@@ -319,6 +319,12 @@ def main():
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
+import signal
+import sys
+
+PID_FILE = "/var/run/brother-john.pid"
+
+
 def daemonize():
     if os.fork() > 0:
         raise SystemExit(0)
@@ -332,7 +338,48 @@ def daemonize():
     os.dup2(devnull_w.fileno(), 1)
     os.dup2(devnull_w.fileno(), 2)
 
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
 
-if __name__ == "__main__":
+
+def cmd_start():
+    if os.path.exists(PID_FILE):
+        with open(PID_FILE) as f:
+            pid = int(f.read().strip())
+        try:
+            os.kill(pid, 0)
+            print(f"Brother John is already running (PID {pid})")
+            raise SystemExit(1)
+        except ProcessLookupError:
+            os.remove(PID_FILE)
+
     daemonize()
     main()
+
+
+def cmd_stop():
+    if not os.path.exists(PID_FILE):
+        print("Brother John is not running")
+        raise SystemExit(1)
+
+    with open(PID_FILE) as f:
+        pid = int(f.read().strip())
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        os.remove(PID_FILE)
+        print(f"Brother John stopped (PID {pid})")
+    except ProcessLookupError:
+        os.remove(PID_FILE)
+        print("Process not found — PID file removed")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in ("start", "stop"):
+        print("Usage: bot.py start|stop")
+        raise SystemExit(1)
+
+    if sys.argv[1] == "start":
+        cmd_start()
+    elif sys.argv[1] == "stop":
+        cmd_stop()

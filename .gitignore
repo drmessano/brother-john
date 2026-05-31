@@ -1,4 +1,5 @@
 .env
+config
 brother-john.db
 brother-john.log
 __pycache__/
