@@ -342,7 +342,7 @@ def daemonize():
         f.write(str(os.getpid()))
 
 
-def cmd_start():
+def cli_start():
     if os.path.exists(PID_FILE):
         with open(PID_FILE) as f:
             pid = int(f.read().strip())
@@ -357,7 +357,7 @@ def cmd_start():
     main()
 
 
-def cmd_stop():
+def cli_stop():
     if not os.path.exists(PID_FILE):
         print("Brother John is not running")
         raise SystemExit(1)
@@ -380,6 +380,6 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     if sys.argv[1] == "start":
-        cmd_start()
+        cli_start()
     elif sys.argv[1] == "stop":
-        cmd_stop()
+        cli_stop()
