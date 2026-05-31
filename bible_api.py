@@ -110,4 +110,16 @@ async def _fetch_fallback(reference: str, translation: str) -> dict:
 
 def _strip_html(html: str) -> str:
     import re
-    return re.sub(r"<[^>]+>", "", html)
+    # Remove section headings and titles (para style s1, s2, d, ms, etc.)
+    html = re.sub(r'<para[^>]+style="[sdm][^"]*"[^>]*>.*?</para>', "", html, flags=re.DOTALL)
+    # Remove all remaining tags
+    text = re.sub(r"<[^>]+>", "", html)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _clean_translation_label(abbreviation: str) -> str:
+    """Return a clean display label, e.g. NIV11 -> NIV."""
+    import re
+    return re.sub(r"\d+$", "", abbreviation)

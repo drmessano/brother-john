@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 
 import db
-from bible_api import fetch_passage, get_available_bibles
+from bible_api import fetch_passage, get_available_bibles, _clean_translation_label
 from study import generate_daily_passage_and_study, generate_study_from_reference
 
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
@@ -109,7 +109,7 @@ async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, referenc
         await context.bot.send_message(chat_id, f"⚠️ Couldn't generate study: {e}")
         return
 
-    header = f"*{_escape(passage['reference'])}* \\({_escape(passage['translation'])}\\)\n\n"
+    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
     verse_block = f"_{_escape(passage['text'])}_\n\n"
     divider = "—" * 20 + "\n\n"
     body = _escape(study_text)
@@ -196,7 +196,7 @@ async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current = _get_translation(update.effective_user.id)
     keyboard = [
         [InlineKeyboardButton(
-            f"{'✅ ' if b.get('abbreviation', b['id']) == current else ''}{b.get('abbreviation', b['id'])} — {b['name']}",
+            f"{'✅ ' if b.get('abbreviation', b['id']) == current else ''}{_clean_translation_label(b.get('abbreviation', b['id']))} — {b['name']}",
             callback_data=f"set_translation:{b.get('abbreviation', b['id'])}"
         )]
         for b in bibles
