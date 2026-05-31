@@ -22,7 +22,9 @@ from study import generate_daily_passage_and_study, generate_study_from_referenc
 
 load_dotenv()
 
+from logging.handlers import RotatingFileHandler as _RotatingFileHandler
 logging.basicConfig(
+    handlers=[_RotatingFileHandler("brother-john.log", maxBytes=5*1024*1024, backupCount=10)],
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
@@ -311,5 +313,19 @@ def main():
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
+def daemonize():
+    if os.fork() > 0:
+        raise SystemExit(0)
+    os.setsid()
+    if os.fork() > 0:
+        raise SystemExit(0)
+
+    devnull = open(os.devnull, "w")
+    os.dup2(open(os.devnull).fileno(), 0)
+    os.dup2(devnull.fileno(), 1)
+    os.dup2(devnull.fileno(), 2)
+
+
 if __name__ == "__main__":
+    daemonize()
     main()
