@@ -17,7 +17,7 @@ from telegram.ext import (
 )
 
 import db
-from bible_api import fetch_passage
+from bible_api import fetch_passage, get_available_bibles
 from study import generate_daily_passage_and_study, generate_study_from_reference
 
 load_dotenv()
@@ -27,8 +27,6 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
-
-TRANSLATIONS = ["KJV", "NIV", "ASV"]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -143,9 +141,23 @@ async def cmd_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 Fetching available translations...")
+    try:
+        bibles = await get_available_bibles()
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Couldn't fetch translations: {e}")
+        return
+
+    if not bibles:
+        await update.message.reply_text("⚠️ No translations available. Make sure BIBLE_API_KEY is set.")
+        return
+
     keyboard = [
-        [InlineKeyboardButton(t, callback_data=f"set_translation:{t}")]
-        for t in TRANSLATIONS
+        [InlineKeyboardButton(
+            f"{b.get('abbreviation', b['id'])} — {b['name']}",
+            callback_data=f"set_translation:{b.get('abbreviation', b['id'])}"
+        )]
+        for b in bibles
     ]
     await update.message.reply_text(
         "Choose your Bible translation:",
