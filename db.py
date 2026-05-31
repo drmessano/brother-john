@@ -7,7 +7,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     translation TEXT NOT NULL DEFAULT 'KJV',
-    daily_time TEXT,          -- HH:MM in UTC, NULL means opted out
+    daily_time TEXT,          -- HH:MM in user's local timezone, NULL means opted out
     timezone TEXT NOT NULL DEFAULT 'America/New_York'
 );
 """

@@ -2,9 +2,14 @@
 import asyncio
 import logging
 import os
-from datetime import time
+import signal
+import sys
+from datetime import datetime, time
+from zoneinfo import ZoneInfo, available_timezones
 
 from dotenv import load_dotenv
+load_dotenv("config")
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -20,8 +25,6 @@ import db
 from bible_api import fetch_passage, get_available_bibles
 from study import generate_daily_passage_and_study, generate_study_from_reference
 
-load_dotenv("config")
-
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
 _LOG_DIR = os.getenv("LOG_DIR", "/var/log/brother-john")
 os.makedirs(_LOG_DIR, exist_ok=True)
@@ -36,8 +39,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DEFAULT_TZ = "America/New_York"
+
 # ---------------------------------------------------------------------------
-# Helpers
+# Timezone helpers
+# ---------------------------------------------------------------------------
+
+def _tz_regions() -> list[str]:
+    regions = sorted({tz.split("/")[0] for tz in available_timezones() if "/" in tz})
+    # Put America first
+    if "America" in regions:
+        regions.insert(0, regions.pop(regions.index("America")))
+    return regions
+
+
+def _tz_for_region(region: str) -> list[str]:
+    return sorted(tz for tz in available_timezones() if tz.startswith(f"{region}/") and tz.count("/") == 1)
+
+
+def _local_time_to_utc(hour: int, minute: int, tz_name: str) -> tuple[int, int]:
+    """Convert a local HH:MM to UTC HH:MM for today's date."""
+    tz = ZoneInfo(tz_name)
+    local_dt = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    utc_dt = local_dt.astimezone(ZoneInfo("UTC"))
+    return utc_dt.hour, utc_dt.minute
+
+
+# ---------------------------------------------------------------------------
+# General helpers
 # ---------------------------------------------------------------------------
 
 def _escape(text: str) -> str:
@@ -50,6 +79,11 @@ def _escape(text: str) -> str:
 def _get_translation(user_id: int) -> str:
     user = db.get_user(user_id)
     return user["translation"] if user else "KJV"
+
+
+def _get_timezone(user_id: int) -> str:
+    user = db.get_user(user_id)
+    return user["timezone"] if user else DEFAULT_TZ
 
 
 async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reference: str, translation: str):
@@ -82,13 +116,10 @@ async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, referenc
 
     full_message = header + verse_block + _escape(divider) + body
 
-    # Telegram has a 4096 char limit per message
     if len(full_message) <= 4096:
         await context.bot.send_message(chat_id, full_message, parse_mode=ParseMode.MARKDOWN_V2)
     else:
-        # Split into passage + study
         await context.bot.send_message(chat_id, header + verse_block, parse_mode=ParseMode.MARKDOWN_V2)
-        # Send study in plain text to avoid escaping issues on long text
         await context.bot.send_message(chat_id, study_text)
 
 
@@ -100,6 +131,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db.upsert_user(user_id)
     translation = _get_translation(user_id)
+    tz = _get_timezone(user_id)
 
     text = (
         "👋 *Welcome to Brother John\\!*\n\n"
@@ -107,11 +139,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Commands:*\n"
         "• /study — Generate a fresh study passage for today\n"
         "• /verse `John 3:16` — Look up any passage\n"
-        "• /daily `8:00` — Get a daily study at a set time \\(UTC\\)\n"
+        "• /daily `8:00` — Get a daily study at a set time\n"
         "• /daily off — Turn off daily studies\n"
         "• /translation — Change your Bible translation\n"
+        "• /timezone — Set your timezone\n"
         "• /settings — View your current settings\n\n"
-        f"Your current translation: *{_escape(translation)}*"
+        f"Translation: *{_escape(translation)}* \\| Timezone: *{_escape(tz)}*"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -160,16 +193,18 @@ async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ No translations available. Make sure BIBLE_API_KEY is set.")
         return
 
+    current = _get_translation(update.effective_user.id)
     keyboard = [
         [InlineKeyboardButton(
-            f"{b.get('abbreviation', b['id'])} — {b['name']}",
+            f"{'✅ ' if b.get('abbreviation', b['id']) == current else ''}{b.get('abbreviation', b['id'])} — {b['name']}",
             callback_data=f"set_translation:{b.get('abbreviation', b['id'])}"
         )]
         for b in bibles
     ]
     await update.message.reply_text(
-        "Choose your Bible translation:",
+        f"Choose your Bible translation \\(current: *{_escape(current)}*\\):",
         reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN_V2,
     )
 
 
@@ -181,13 +216,105 @@ async def callback_set_translation(update: Update, context: ContextTypes.DEFAULT
     await query.edit_message_text(f"✅ Translation set to *{_escape(translation)}*", parse_mode=ParseMode.MARKDOWN_V2)
 
 
+# ---------------------------------------------------------------------------
+# Timezone command — two-step drill-down
+# ---------------------------------------------------------------------------
+
+async def cmd_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    db.upsert_user(user_id)
+    current_tz = _get_timezone(user_id)
+
+    regions = _tz_regions()
+    keyboard = [
+        [InlineKeyboardButton(f"✅ Keep: {current_tz}", callback_data="tz_keep")]
+    ] + [
+        [InlineKeyboardButton(r, callback_data=f"tz_region:{r}")]
+        for r in regions
+    ]
+    await update.message.reply_text(
+        f"🌍 Your current timezone: *{_escape(current_tz)}*\n\nSelect a region or keep your current setting:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+
+async def callback_tz_region(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    region = query.data.split(":", 1)[1]
+    current_tz = _get_timezone(query.from_user.id)
+
+    timezones = _tz_for_region(region)
+
+    # Put the user's current tz at the top if it's in this region
+    if current_tz in timezones:
+        timezones = [current_tz] + [tz for tz in timezones if tz != current_tz]
+
+    keyboard = [
+        [InlineKeyboardButton(
+            f"{'✅ ' if tz == current_tz else ''}{tz.split('/', 1)[1]}",
+            callback_data=f"tz_set:{tz}"
+        )]
+        for tz in timezones
+    ] + [
+        [InlineKeyboardButton("« Back to regions", callback_data="tz_back")]
+    ]
+    await query.edit_message_text(
+        f"Select a timezone in *{_escape(region)}*:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+
+async def callback_tz_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    tz_name = query.data.split(":", 1)[1]
+    db.upsert_user(query.from_user.id, timezone=tz_name)
+    await query.edit_message_text(
+        f"✅ Timezone set to *{_escape(tz_name)}*",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+
+async def callback_tz_keep(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("👍 Timezone unchanged.")
+
+
+async def callback_tz_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current_tz = _get_timezone(query.from_user.id)
+    regions = _tz_regions()
+    keyboard = [
+        [InlineKeyboardButton(f"✅ Keep: {current_tz}", callback_data="tz_keep")]
+    ] + [
+        [InlineKeyboardButton(r, callback_data=f"tz_region:{r}")]
+        for r in regions
+    ]
+    await query.edit_message_text(
+        f"🌍 Your current timezone: *{_escape(current_tz)}*\n\nSelect a region or keep your current setting:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Daily study scheduling
+# ---------------------------------------------------------------------------
+
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db.upsert_user(user_id)
+    tz_name = _get_timezone(user_id)
 
     if not context.args:
         await update.message.reply_text(
-            "Usage:\n/daily 8:00 — Receive a study every day at 8:00 UTC\n/daily off — Stop daily studies"
+            f"Usage:\n/daily 8:00 — Receive a study every day at 8:00 in your timezone \\({_escape(tz_name)}\\)\n/daily off — Stop daily studies",
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return
 
@@ -195,41 +322,40 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if arg == "off":
         db.upsert_user(user_id, daily_time=None)
-        # Remove existing job if any
         jobs = context.job_queue.get_jobs_by_name(f"daily_{user_id}")
         for job in jobs:
             job.schedule_removal()
         await update.message.reply_text("🔕 Daily studies turned off.")
         return
 
-    # Parse HH:MM
     try:
         parts = arg.replace(".", ":").split(":")
         hour, minute = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             raise ValueError
     except (ValueError, IndexError):
-        await update.message.reply_text("⚠️ Invalid time. Use 24h format like: /daily 8:00 or /daily 20:30")
+        await update.message.reply_text("⚠️ Invalid time. Use format like: /daily 8:00 or /daily 20:30")
         return
 
     daily_time = f"{hour:02d}:{minute:02d}"
     db.upsert_user(user_id, daily_time=daily_time)
 
-    # Remove old job, schedule new one
+    utc_hour, utc_minute = _local_time_to_utc(hour, minute, tz_name)
+
     jobs = context.job_queue.get_jobs_by_name(f"daily_{user_id}")
     for job in jobs:
         job.schedule_removal()
 
     context.job_queue.run_daily(
         _daily_job,
-        time=time(hour=hour, minute=minute),
+        time=time(hour=utc_hour, minute=utc_minute, tzinfo=ZoneInfo("UTC")),
         chat_id=update.effective_chat.id,
         user_id=user_id,
         name=f"daily_{user_id}",
     )
 
     await update.message.reply_text(
-        f"✅ Daily study set for *{_escape(daily_time)} UTC* every day\\.",
+        f"✅ Daily study set for *{_escape(daily_time)}* in *{_escape(tz_name)}* every day\\.",
         parse_mode=ParseMode.MARKDOWN_V2,
     )
 
@@ -256,13 +382,15 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(user_id)
     translation = user["translation"] if user else "KJV"
     daily_time = user["daily_time"] if user else None
+    tz_name = user["timezone"] if user else DEFAULT_TZ
 
-    daily_str = f"{daily_time} UTC" if daily_time else "Off"
+    daily_str = f"{daily_time} ({tz_name})" if daily_time else "Off"
     text = (
         "*Your Settings*\n\n"
         f"📖 Translation: *{_escape(translation)}*\n"
+        f"🕐 Timezone: *{_escape(tz_name)}*\n"
         f"🌅 Daily study: *{_escape(daily_str)}*\n\n"
-        "Change with /translation or /daily"
+        "Change with /translation, /timezone, or /daily"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -282,12 +410,14 @@ async def post_init(app: Application):
     for user in subscribers:
         user_id = user["user_id"]
         daily_time_str = user["daily_time"]
+        tz_name = user["timezone"] or DEFAULT_TZ
         try:
             h, m = map(int, daily_time_str.split(":"))
-            # We don't have a chat_id stored — skip silently
-            # (they'll re-register with /daily after a restart)
-        except Exception:
-            pass
+            utc_h, utc_m = _local_time_to_utc(h, m, tz_name)
+            # chat_id not stored — user must re-register with /daily after restart
+            logger.info(f"Would restore daily job for user {user_id} at {h:02d}:{m:02d} {tz_name}")
+        except Exception as e:
+            logger.warning(f"Could not restore daily job for user {user_id}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -313,14 +443,16 @@ def main():
     app.add_handler(CommandHandler("translation", cmd_translation))
     app.add_handler(CommandHandler("daily", cmd_daily))
     app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("timezone", cmd_timezone))
     app.add_handler(CallbackQueryHandler(callback_set_translation, pattern=r"^set_translation:"))
+    app.add_handler(CallbackQueryHandler(callback_tz_region, pattern=r"^tz_region:"))
+    app.add_handler(CallbackQueryHandler(callback_tz_set, pattern=r"^tz_set:"))
+    app.add_handler(CallbackQueryHandler(callback_tz_keep, pattern=r"^tz_keep$"))
+    app.add_handler(CallbackQueryHandler(callback_tz_back, pattern=r"^tz_back$"))
 
     logger.info("Brother John starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-
-import signal
-import sys
 
 PID_FILE = "/var/run/brother-john.pid"
 
