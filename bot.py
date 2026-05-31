@@ -23,8 +23,14 @@ from study import generate_daily_passage_and_study, generate_study_from_referenc
 load_dotenv()
 
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
+_LOG_DIR = os.getenv("LOG_DIR", "/var/log/brother-john")
+os.makedirs(_LOG_DIR, exist_ok=True)
 logging.basicConfig(
-    handlers=[_RotatingFileHandler("brother-john.log", maxBytes=5*1024*1024, backupCount=10)],
+    handlers=[_RotatingFileHandler(
+        os.path.join(_LOG_DIR, "brother-john.log"),
+        maxBytes=5*1024*1024,
+        backupCount=10,
+    )],
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
