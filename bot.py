@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, available_timezones
 from dotenv import load_dotenv
 load_dotenv("config")
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -40,6 +40,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DEFAULT_TZ = "America/New_York"
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["📖 Study", "🔍 Verse"],
+        ["⚙️ Settings", "🌐 Translation", "🕐 Timezone"],
+        ["📅 Daily On", "📅 Daily Off"],
+    ],
+    resize_keyboard=True,
+    persistent=True,
+)
 
 # ---------------------------------------------------------------------------
 # Timezone helpers
@@ -146,7 +156,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /settings — View your current settings\n\n"
         f"Translation: *{_escape(translation)}* \\| Timezone: *{_escape(tz)}*"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
 
 
 async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -399,6 +409,25 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
 
+async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "📖 Study":
+        await cmd_study(update, context)
+    elif text == "🔍 Verse":
+        await update.message.reply_text("Send me a reference, e.g.:\n/verse John 3:16")
+    elif text == "⚙️ Settings":
+        await cmd_settings(update, context)
+    elif text == "🌐 Translation":
+        await cmd_translation(update, context)
+    elif text == "🕐 Timezone":
+        await cmd_timezone(update, context)
+    elif text == "📅 Daily On":
+        await update.message.reply_text("Send me a time, e.g.:\n/daily 8:00")
+    elif text == "📅 Daily Off":
+        context.args = ["off"]
+        await cmd_daily(update, context)
+
+
 # ---------------------------------------------------------------------------
 # Restore daily jobs on startup
 # ---------------------------------------------------------------------------
@@ -445,6 +474,10 @@ def main():
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("timezone", cmd_timezone))
     app.add_handler(CallbackQueryHandler(callback_set_translation, pattern=r"^set_translation:"))
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r"^(📖 Study|🔍 Verse|⚙️ Settings|🌐 Translation|🕐 Timezone|📅 Daily On|📅 Daily Off)$"),
+        handle_keyboard_button,
+    ))
     app.add_handler(CallbackQueryHandler(callback_tz_region, pattern=r"^tz_region:"))
     app.add_handler(CallbackQueryHandler(callback_tz_set, pattern=r"^tz_set:"))
     app.add_handler(CallbackQueryHandler(callback_tz_keep, pattern=r"^tz_keep$"))
