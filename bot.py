@@ -326,10 +326,11 @@ def daemonize():
     if os.fork() > 0:
         raise SystemExit(0)
 
-    devnull = open(os.devnull, "w")
-    os.dup2(open(os.devnull).fileno(), 0)
-    os.dup2(devnull.fileno(), 1)
-    os.dup2(devnull.fileno(), 2)
+    devnull_r = open(os.devnull, "r")
+    devnull_w = open(os.devnull, "w")
+    os.dup2(devnull_r.fileno(), 0)
+    os.dup2(devnull_w.fileno(), 1)
+    os.dup2(devnull_w.fileno(), 2)
 
 
 if __name__ == "__main__":
