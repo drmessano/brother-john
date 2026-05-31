@@ -2,7 +2,7 @@
 import os
 import aiohttp
 
-API_BASE = "https://api.scripture.api.bible/v1"
+API_BASE = "https://rest.api.bible/v1"
 
 _bible_cache: dict | None = None
 
