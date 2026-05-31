@@ -6,7 +6,7 @@ DB_PATH = "brother-john.db"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
-    translation TEXT NOT NULL DEFAULT 'ESV',
+    translation TEXT NOT NULL DEFAULT 'KJV',
     daily_time TEXT,          -- HH:MM in UTC, NULL means opted out
     timezone TEXT NOT NULL DEFAULT 'America/New_York'
 );
