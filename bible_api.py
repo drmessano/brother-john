@@ -1,33 +1,55 @@
-"""
-Fetch Bible passage text from api.bible (scripture.api.bible).
-Free tier: 5000 requests/day. Register at https://scripture.api.bible/
-Falls back to a simple KJV public-domain endpoint if no API key is set.
-"""
+#!/usr/bin/env python3
 import os
 import aiohttp
 
-# Bible IDs on api.bible
-BIBLE_IDS = {
-    "ESV": "f421fe261da7624f-01",
-    "NIV": "78a9f6124f344018-01",
-    "KJV": "de4e12af7f28f599-02",
-}
-
 API_BASE = "https://api.scripture.api.bible/v1"
 
+_bible_cache: dict | None = None
 
-async def fetch_passage(reference: str, translation: str = "ESV") -> dict:
+
+async def get_available_bibles() -> list[dict]:
+    """Returns list of available bibles from api.bible. Results are cached."""
+    global _bible_cache
+    if _bible_cache is not None:
+        return _bible_cache
+
+    api_key = os.getenv("BIBLE_API_KEY", "")
+    if not api_key:
+        return []
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{API_BASE}/bibles", headers={"api-key": api_key}) as resp:
+            if resp.status != 200:
+                raise ValueError(f"Bible API error {resp.status}: {await resp.text()}")
+            data = await resp.json()
+
+    _bible_cache = data.get("data", [])
+    return _bible_cache
+
+
+async def find_bible_id(abbreviation: str) -> str | None:
+    """Look up a bible ID by abbreviation (e.g. 'KJV', 'NIV')."""
+    bibles = await get_available_bibles()
+    abbr_upper = abbreviation.upper()
+    for b in bibles:
+        if b.get("abbreviation", "").upper() == abbr_upper:
+            return b["id"]
+    return None
+
+
+async def fetch_passage(reference: str, translation: str = "KJV") -> dict:
     """
     Returns {"text": str, "reference": str, "translation": str}
     reference: e.g. "John 3:16" or "Romans 8:28-30"
     """
     api_key = os.getenv("BIBLE_API_KEY", "")
-    bible_id = BIBLE_IDS.get(translation, BIBLE_IDS["ESV"])
 
     if api_key:
+        bible_id = await find_bible_id(translation)
+        if not bible_id:
+            raise ValueError(f"Translation '{translation}' not found in api.bible")
         return await _fetch_from_api(reference, bible_id, api_key, translation)
     else:
-        # Fallback: use a free no-key endpoint (KJV only via labs.bible.org)
         return await _fetch_fallback(reference, translation)
 
 

@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TRANSLATIONS = ["ESV", "NIV", "KJV"]
+TRANSLATIONS = ["KJV", "NIV", "ASV"]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,7 +43,7 @@ def _escape(text: str) -> str:
 
 def _get_translation(user_id: int) -> str:
     user = db.get_user(user_id)
-    return user["translation"] if user else "ESV"
+    return user["translation"] if user else "KJV"
 
 
 async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reference: str, translation: str):
@@ -234,7 +234,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db.upsert_user(user_id)
     user = db.get_user(user_id)
-    translation = user["translation"] if user else "ESV"
+    translation = user["translation"] if user else "KJV"
     daily_time = user["daily_time"] if user else None
 
     daily_str = f"{daily_time} UTC" if daily_time else "Off"
