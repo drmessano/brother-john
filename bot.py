@@ -167,7 +167,7 @@ async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     loop = asyncio.get_event_loop()
     try:
-        reference = await loop.run_in_executor(None, generate_daily_passage_and_study, translation)
+        reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id))
     except Exception as e:
         await update.message.reply_text(f"⚠️ Couldn't choose a passage: {e}")
         return
@@ -376,7 +376,7 @@ async def _daily_job(context: ContextTypes.DEFAULT_TYPE):
 
     loop = asyncio.get_event_loop()
     try:
-        reference = await loop.run_in_executor(None, generate_daily_passage_and_study, translation)
+        reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id))
     except Exception as e:
         await context.bot.send_message(chat_id, f"⚠️ Daily study error: {e}")
         return

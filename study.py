@@ -34,23 +34,38 @@ def generate_study_prompt(passage_text: str, reference: str, translation: str) -
     return message.content[0].text
 
 
-def generate_daily_passage_and_study(translation: str = "ESV") -> tuple[str, str]:
+def generate_daily_passage_and_study(translation: str = "KJV", user_id: int = 0) -> str:
     """
-    Ask Claude to choose a passage for today's study, then generate the study.
-    Returns (reference, study_text).
+    Ask Claude to choose a passage for today's study.
+    Returns the reference string.
     """
+    import random
+    from datetime import date
+
+    today = date.today().isoformat()
+
+    # Books of the Bible to draw from — shuffle deterministically per user+date
+    books = [
+        "Genesis", "Exodus", "Psalms", "Proverbs", "Isaiah", "Jeremiah",
+        "Matthew", "Mark", "Luke", "John", "Acts", "Romans", "1 Corinthians",
+        "2 Corinthians", "Galatians", "Ephesians", "Philippians", "Colossians",
+        "1 Thessalonians", "Hebrews", "James", "1 Peter", "1 John", "Revelation",
+    ]
+    rng = random.Random(f"{user_id}-{today}")
+    suggested_book = rng.choice(books)
+
     system = (
         "You are a Bible study curator. Choose one Bible passage (3-10 verses) "
         "that would make an excellent focused daily study — something with depth, "
-        "narrative, or a clear teaching moment. Vary the selection across different "
-        "books and themes over time. Reply with ONLY the reference, e.g. 'Romans 8:28-39'."
+        "narrative, or a clear teaching moment. "
+        "Reply with ONLY the reference, e.g. 'Romans 8:28-39'."
     )
 
     selection = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=50,
         system=system,
-        messages=[{"role": "user", "content": "Choose today's study passage."}],
+        messages=[{"role": "user", "content": f"Choose a study passage from the book of {suggested_book} for {today}."}],
     )
 
     reference = selection.content[0].text.strip()

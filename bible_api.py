@@ -133,8 +133,10 @@ async def _fetch_fallback(reference: str, translation: str) -> dict:
 
 def _strip_html(html: str) -> str:
     import re
-    # Remove section headings and titles (para style s1, s2, d, ms, etc.)
-    html = re.sub(r'<para[^>]+style="[sdm][^"]*"[^>]*>.*?</para>', "", html, flags=re.DOTALL)
+    # Remove section headings: <p class="s1">, <p class="s2">, <p class="d">, etc.
+    html = re.sub(r'<p[^>]+class="[sdm][^"]*"[^>]*>.*?</p>', "", html, flags=re.DOTALL)
+    # Remove verse number spans (e.g. <span data-number="1" ...>1</span>)
+    html = re.sub(r'<span[^>]+data-number="[^"]*"[^>]*>\d+</span>', "", html)
     # Remove all remaining tags
     text = re.sub(r"<[^>]+>", "", html)
     # Collapse whitespace
