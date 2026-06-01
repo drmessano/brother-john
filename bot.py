@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, available_timezones
 from dotenv import load_dotenv
 load_dotenv("config")
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, BotCommand
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -444,6 +444,18 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
 
 async def post_init(app: Application):
     db.init_db()
+
+    await app.bot.set_my_commands([
+        BotCommand("study",       "Generate a fresh Bible study for today"),
+        BotCommand("verse",       "Study a specific passage, e.g. /verse John 3:16"),
+        BotCommand("daily",       "Set a daily study time, e.g. /daily 8:00"),
+        BotCommand("translation", "Change your Bible translation"),
+        BotCommand("timezone",    "Set your timezone"),
+        BotCommand("settings",    "View your current settings"),
+        BotCommand("help",        "Show help and command list"),
+    ])
+    logger.info("Bot commands registered")
+
     subscribers = db.get_daily_subscribers()
     logger.info(f"Restoring {len(subscribers)} daily jobs")
     for user in subscribers:
