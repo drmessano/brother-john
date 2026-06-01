@@ -161,8 +161,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db.upsert_user(user_id)
-    translation = _get_translation(user_id)
 
+    allowed, remaining = db.check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text("⏱ You've reached the limit of 20 studies per hour. Please try again later.")
+        return
+
+    translation = _get_translation(user_id)
     await update.message.reply_text("🙏 Choosing today's passage...")
 
     loop = asyncio.get_event_loop()
@@ -178,6 +183,12 @@ async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db.upsert_user(user_id)
+
+    allowed, remaining = db.check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text("⏱ You've reached the limit of 20 studies per hour. Please try again later.")
+        return
+
     translation = _get_translation(user_id)
 
     if not context.args:
