@@ -1,10 +1,66 @@
 #!/usr/bin/env python3
 import os
+import re
 import aiohttp
 
 API_BASE = "https://rest.api.bible/v1"
 
 _bible_cache: dict | None = None
+
+# USFM book ID mapping
+BOOK_IDS = {
+    "genesis": "GEN", "exodus": "EXO", "leviticus": "LEV", "numbers": "NUM",
+    "deuteronomy": "DEU", "joshua": "JOS", "judges": "JDG", "ruth": "RUT",
+    "1 samuel": "1SA", "2 samuel": "2SA", "1 kings": "1KI", "2 kings": "2KI",
+    "1 chronicles": "1CH", "2 chronicles": "2CH", "ezra": "EZR", "nehemiah": "NEH",
+    "esther": "EST", "job": "JOB", "psalms": "PSA", "psalm": "PSA",
+    "proverbs": "PRO", "ecclesiastes": "ECC", "song of solomon": "SNG",
+    "song of songs": "SNG", "isaiah": "ISA", "jeremiah": "JER",
+    "lamentations": "LAM", "ezekiel": "EZK", "daniel": "DAN", "hosea": "HOS",
+    "joel": "JOL", "amos": "AMO", "obadiah": "OBA", "jonah": "JON",
+    "micah": "MIC", "nahum": "NAH", "habakkuk": "HAB", "zephaniah": "ZEP",
+    "haggai": "HAG", "zechariah": "ZEC", "malachi": "MAL",
+    "matthew": "MAT", "mark": "MRK", "luke": "LUK", "john": "JHN",
+    "acts": "ACT", "romans": "ROM", "1 corinthians": "1CO", "2 corinthians": "2CO",
+    "galatians": "GAL", "ephesians": "EPH", "philippians": "PHP",
+    "colossians": "COL", "1 thessalonians": "1TH", "2 thessalonians": "2TH",
+    "1 timothy": "1TI", "2 timothy": "2TI", "titus": "TIT", "philemon": "PHM",
+    "hebrews": "HEB", "james": "JAS", "1 peter": "1PE", "2 peter": "2PE",
+    "1 john": "1JN", "2 john": "2JN", "3 john": "3JN", "jude": "JUD",
+    "revelation": "REV",
+}
+
+
+def _reference_to_passage_id(reference: str) -> str | None:
+    """Convert 'Philippians 2:1-11' -> 'PHP.2.1-PHP.2.11'"""
+    ref = reference.strip()
+
+    # Match: Book Chapter:Verse or Book Chapter:Verse-EndVerse
+    m = re.match(r"^(.+?)\s+(\d+):(\d+)(?:-(\d+))?$", ref, re.IGNORECASE)
+    if not m:
+        # Try Book Chapter (whole chapter)
+        m2 = re.match(r"^(.+?)\s+(\d+)$", ref, re.IGNORECASE)
+        if m2:
+            book_name = m2.group(1).lower()
+            chapter = m2.group(2)
+            usfm = BOOK_IDS.get(book_name)
+            if usfm:
+                return f"{usfm}.{chapter}"
+        return None
+
+    book_name = m.group(1).lower()
+    chapter = m.group(2)
+    verse_start = m.group(3)
+    verse_end = m.group(4)
+
+    usfm = BOOK_IDS.get(book_name)
+    if not usfm:
+        return None
+
+    if verse_end:
+        return f"{usfm}.{chapter}.{verse_start}-{usfm}.{chapter}.{verse_end}"
+    else:
+        return f"{usfm}.{chapter}.{verse_start}"
 
 
 async def get_available_bibles() -> list[dict]:
@@ -28,30 +84,22 @@ async def get_available_bibles() -> list[dict]:
 
 
 def _normalize_abbr(abbr: str) -> str:
-    """Strip language prefixes (eng, es, fr, etc.) and trailing digits.
-    e.g. engKJV -> KJV, NIV11 -> NIV, engWEBU -> WEBU
-    """
-    import re
-    abbr = re.sub(r"^[a-z]{2,3}(?=[A-Z])", "", abbr)   # strip lowercase prefix before uppercase
-    abbr = re.sub(r"\d+$", "", abbr)                     # strip trailing digits
+    """Strip language prefixes (eng, es, fr, etc.) and trailing digits."""
+    abbr = re.sub(r"^[a-z]{2,3}(?=[A-Z])", "", abbr)
+    abbr = re.sub(r"\d+$", "", abbr)
     return abbr.upper()
 
 
 async def find_bible_id(abbreviation: str) -> str | None:
-    """Look up a bible ID by abbreviation. Normalizes both sides so that
-    e.g. 'KJV' matches 'engKJV' and 'NIV' matches 'NIV11'.
-    Prefers exact match, then normalized match with shortest abbreviation.
-    """
+    """Look up a bible ID by abbreviation, normalizing both sides."""
     bibles = await get_available_bibles()
     abbr_upper = abbreviation.upper()
     normalized = _normalize_abbr(abbreviation)
 
-    # Exact match first
     for b in bibles:
         if b.get("abbreviation", "").upper() == abbr_upper:
             return b["id"]
 
-    # Normalized match
     matches = [b for b in bibles if _normalize_abbr(b.get("abbreviation", "")) == normalized]
     if matches:
         matches.sort(key=lambda b: len(b.get("abbreviation", "")))
@@ -77,10 +125,26 @@ async def fetch_passage(reference: str, translation: str = "KJV") -> dict:
 
 
 async def _fetch_from_api(reference: str, bible_id: str, api_key: str, translation: str) -> dict:
-    search_url = f"{API_BASE}/bibles/{bible_id}/search"
     headers = {"api-key": api_key}
-    params = {"query": reference, "limit": 1}
 
+    # Try passages endpoint first (most reliable for references)
+    passage_id = _reference_to_passage_id(reference)
+    if passage_id:
+        url = f"{API_BASE}/bibles/{bible_id}/passages/{passage_id}"
+        params = {"content-type": "html", "include-notes": "false", "include-titles": "false"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    passage = data.get("data", {})
+                    text = _strip_html(passage.get("content", ""))
+                    ref = passage.get("reference", reference)
+                    if text:
+                        return {"text": text.strip(), "reference": ref, "translation": translation}
+
+    # Fallback to search
+    search_url = f"{API_BASE}/bibles/{bible_id}/search"
+    params = {"query": reference, "limit": 1}
     async with aiohttp.ClientSession() as session:
         async with session.get(search_url, headers=headers, params=params) as resp:
             if resp.status != 200:
@@ -89,17 +153,17 @@ async def _fetch_from_api(reference: str, bible_id: str, api_key: str, translati
 
     passages = data.get("data", {}).get("passages", [])
     if passages:
-        raw = passages[0].get("content", "")
-        text = _strip_html(raw)
+        text = _strip_html(passages[0].get("content", ""))
         ref = passages[0].get("reference", reference)
-    else:
-        verses = data.get("data", {}).get("verses", [])
-        if not verses:
-            raise ValueError(f"No results found for '{reference}'")
+        return {"text": text.strip(), "reference": ref, "translation": translation}
+
+    verses = data.get("data", {}).get("verses", [])
+    if verses:
         text = " ".join(_strip_html(v.get("text", "")) for v in verses)
         ref = f"{verses[0].get('reference', '')}–{verses[-1].get('reference', '')}" if len(verses) > 1 else verses[0].get("reference", reference)
+        return {"text": text.strip(), "reference": ref, "translation": translation}
 
-    return {"text": text.strip(), "reference": ref, "translation": translation}
+    raise ValueError(f"No results found for '{reference}'")
 
 
 async def _fetch_fallback(reference: str, translation: str) -> dict:
@@ -116,12 +180,8 @@ async def _fetch_fallback(reference: str, translation: str) -> dict:
     if not data or not isinstance(data, list):
         raise ValueError(f"No results for '{reference}'")
 
-    verses = []
-    for v in data:
-        verses.append(v.get("text", "").strip())
-
-    first = data[0]
-    last = data[-1]
+    verses = [v.get("text", "").strip() for v in data]
+    first, last = data[0], data[-1]
     book = first.get("bookname", "")
     ch = first.get("chapter", "")
     v_start = first.get("verse", "")
@@ -132,10 +192,9 @@ async def _fetch_fallback(reference: str, translation: str) -> dict:
 
 
 def _strip_html(html: str) -> str:
-    import re
     # Remove section headings: <p class="s1">, <p class="s2">, <p class="d">, etc.
     html = re.sub(r'<p[^>]+class="[sdm][^"]*"[^>]*>.*?</p>', "", html, flags=re.DOTALL)
-    # Remove verse number spans (e.g. <span data-number="1" ...>1</span>)
+    # Remove verse number spans
     html = re.sub(r'<span[^>]+data-number="[^"]*"[^>]*>\d+</span>', "", html)
     # Remove all remaining tags
     text = re.sub(r"<[^>]+>", "", html)
@@ -146,5 +205,4 @@ def _strip_html(html: str) -> str:
 
 def _clean_translation_label(abbreviation: str) -> str:
     """Return a clean display label, e.g. NIV11 -> NIV."""
-    import re
     return re.sub(r"\d+$", "", abbreviation)
