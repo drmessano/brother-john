@@ -41,6 +41,7 @@ def upsert_user(user_id: int, **kwargs):
     else:
         doc = {
             "user_id": user_id,
+            "chat_id": user_id,  # default to same as user_id, updated on /daily
             "translation": "KJV",
             "timezone": "America/New_York",
             "daily_time": None,

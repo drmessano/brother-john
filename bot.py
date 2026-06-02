@@ -39,6 +39,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Silence noisy third-party loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+
 DEFAULT_TZ = "America/New_York"
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -358,7 +363,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     daily_time = f"{hour:02d}:{minute:02d}"
-    db.upsert_user(user_id, daily_time=daily_time)
+    db.upsert_user(user_id, daily_time=daily_time, chat_id=update.effective_chat.id)
 
     utc_hour, utc_minute = _local_time_to_utc(hour, minute, tz_name)
 
@@ -460,13 +465,20 @@ async def post_init(app: Application):
     logger.info(f"Restoring {len(subscribers)} daily jobs")
     for user in subscribers:
         user_id = user["user_id"]
+        chat_id = user.get("chat_id", user_id)
         daily_time_str = user["daily_time"]
-        tz_name = user["timezone"] or DEFAULT_TZ
+        tz_name = user.get("timezone") or DEFAULT_TZ
         try:
             h, m = map(int, daily_time_str.split(":"))
             utc_h, utc_m = _local_time_to_utc(h, m, tz_name)
-            # chat_id not stored — user must re-register with /daily after restart
-            logger.info(f"Would restore daily job for user {user_id} at {h:02d}:{m:02d} {tz_name}")
+            app.job_queue.run_daily(
+                _daily_job,
+                time=time(hour=utc_h, minute=utc_m, tzinfo=ZoneInfo("UTC")),
+                chat_id=chat_id,
+                user_id=user_id,
+                name=f"daily_{user_id}",
+            )
+            logger.info(f"Restored daily job for user {user_id} at {h:02d}:{m:02d} {tz_name}")
         except Exception as e:
             logger.warning(f"Could not restore daily job for user {user_id}: {e}")
 
