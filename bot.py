@@ -574,11 +574,13 @@ def cli_stop():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] not in ("start", "stop"):
-        print("Usage: bot.py start|stop")
+    if len(sys.argv) < 2 or sys.argv[1] not in ("start", "stop", "run"):
+        print("Usage: bot.py start|stop|run")
         raise SystemExit(1)
 
     if sys.argv[1] == "start":
         cli_start()
     elif sys.argv[1] == "stop":
         cli_stop()
+    elif sys.argv[1] == "run":
+        main()
