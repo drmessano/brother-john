@@ -5,3 +5,5 @@ brother-john.json
 brother-john.log
 __pycache__/
 *.pyc
+.claude
+.env.example
