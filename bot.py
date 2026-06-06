@@ -102,12 +102,18 @@ def _get_timezone(user_id: int) -> str:
 
 async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reference: str, translation: str):
     """Fetch passage, generate study, send to chat."""
-    await context.bot.send_message(chat_id, "📖 Fetching passage and generating your study... (this takes ~15 seconds)")
+    status = await context.bot.send_message(chat_id, "📖 Fetching passage and generating your study...")
+
+    async def _edit(text: str):
+        try:
+            await context.bot.edit_message_text(text, chat_id=chat_id, message_id=status.message_id)
+        except Exception:
+            pass
 
     try:
         passage = await fetch_passage(reference, translation)
     except Exception as e:
-        await context.bot.send_message(chat_id, f"⚠️ Couldn't fetch passage: {e}\n\nTry a reference like: John 3:16 or Romans 8:28-30")
+        await _edit(f"⚠️ Couldn't fetch passage: {e}\n\nTry a reference like: John 3:16 or Romans 8:28-30")
         return
 
     loop = asyncio.get_event_loop()
@@ -120,8 +126,14 @@ async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, referenc
             passage["translation"],
         )
     except Exception as e:
-        await context.bot.send_message(chat_id, f"⚠️ Couldn't generate study: {e}")
+        await _edit(f"⚠️ Couldn't generate study: {e}")
         return
+
+    # Delete the status message and send the real study
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
+    except Exception:
+        pass
 
     header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
     verse_block = f"_{_escape(passage['text'])}_\n\n"
@@ -135,6 +147,32 @@ async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, referenc
     else:
         await context.bot.send_message(chat_id, header + verse_block, parse_mode=ParseMode.MARKDOWN_V2)
         await context.bot.send_message(chat_id, study_text)
+
+
+async def _send_cached_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cached: dict):
+    """Send a pre-cached study directly."""
+    passage_ref = cached["reference"]
+    translation = cached["translation"]
+    study_text = cached["study_text"]
+
+    # We need the passage text too — fetch it (will hit verse cache)
+    try:
+        passage = await fetch_passage(passage_ref, translation)
+    except Exception:
+        return False  # caller should fall back to generating fresh
+
+    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(translation))}\\)\n\n"
+    verse_block = f"_{_escape(passage['text'])}_\n\n"
+    divider = "—" * 20 + "\n\n"
+    body = _escape(study_text)
+    full_message = header + verse_block + _escape(divider) + body
+
+    if len(full_message) <= 4096:
+        await context.bot.send_message(chat_id, full_message, parse_mode=ParseMode.MARKDOWN_V2)
+    else:
+        await context.bot.send_message(chat_id, header + verse_block, parse_mode=ParseMode.MARKDOWN_V2)
+        await context.bot.send_message(chat_id, study_text)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -173,16 +211,32 @@ async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     translation = _get_translation(user_id)
-    await update.message.reply_text("🙏 Choosing today's passage...")
+    chat_id = update.effective_chat.id
 
+    # Serve cached study on first request of the day
+    if not db.has_used_cache_today(user_id):
+        cached = db.get_cached_study(translation)
+        if cached:
+            db.mark_cache_used(user_id)
+            sent = await _send_cached_study(context, chat_id, cached)
+            if sent:
+                return
+
+    # Generate fresh study
+    status = await update.message.reply_text("🙏 Choosing today's passage...")
     loop = asyncio.get_event_loop()
     try:
         reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id))
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Couldn't choose a passage: {e}")
+        await context.bot.edit_message_text(f"⚠️ Couldn't choose a passage: {e}", chat_id=chat_id, message_id=status.message_id)
         return
 
-    await _send_study(context, update.effective_chat.id, reference, translation)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
+    except Exception:
+        pass
+
+    await _send_study(context, chat_id, reference, translation)
 
 
 async def cmd_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -390,6 +444,18 @@ async def _daily_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     translation = _get_translation(user_id)
 
+    await context.bot.send_message(chat_id, "🌅 *Good morning\\! Here is today\\'s Bible study\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+
+    # Serve cached study if not yet used today
+    if not db.has_used_cache_today(user_id):
+        cached = db.get_cached_study(translation)
+        if cached:
+            db.mark_cache_used(user_id)
+            sent = await _send_cached_study(context, chat_id, cached)
+            if sent:
+                return
+
+    # Generate fresh
     loop = asyncio.get_event_loop()
     try:
         reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id))
@@ -397,7 +463,6 @@ async def _daily_job(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, f"⚠️ Daily study error: {e}")
         return
 
-    await context.bot.send_message(chat_id, "🌅 *Good morning\\! Here is today\\'s Bible study\\.*", parse_mode=ParseMode.MARKDOWN_V2)
     await _send_study(context, chat_id, reference, translation)
 
 
@@ -444,6 +509,36 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # ---------------------------------------------------------------------------
+# Midnight pre-fetch job
+# ---------------------------------------------------------------------------
+
+async def _prefetch_job(context: ContextTypes.DEFAULT_TYPE):
+    """Pre-generate one study per active translation at midnight UTC."""
+    db.clear_study_cache()
+    translations = db.get_active_translations()
+    logger.info(f"Pre-fetching daily studies for translations: {translations}")
+
+    loop = asyncio.get_event_loop()
+    for translation in translations:
+        try:
+            reference = await loop.run_in_executor(
+                None, lambda t=translation: generate_daily_passage_and_study(t, user_id=0)
+            )
+            passage = await fetch_passage(reference, translation)
+            study_text = await loop.run_in_executor(
+                None,
+                generate_study_from_reference,
+                passage["reference"],
+                passage["text"],
+                passage["translation"],
+            )
+            db.set_cached_study(translation, passage["reference"], study_text)
+            logger.info(f"Pre-fetched study for {translation}: {passage['reference']}")
+        except Exception as e:
+            logger.error(f"Pre-fetch failed for {translation}: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Restore daily jobs on startup
 # ---------------------------------------------------------------------------
 
@@ -460,6 +555,14 @@ async def post_init(app: Application):
         BotCommand("help",        "Show help and command list"),
     ])
     logger.info("Bot commands registered")
+
+    # Schedule midnight pre-fetch of daily studies
+    app.job_queue.run_daily(
+        _prefetch_job,
+        time=time(hour=0, minute=0, tzinfo=ZoneInfo("UTC")),
+        name="prefetch_daily",
+    )
+    logger.info("Scheduled midnight pre-fetch job")
 
     subscribers = db.get_daily_subscribers()
     logger.info(f"Restoring {len(subscribers)} daily jobs")

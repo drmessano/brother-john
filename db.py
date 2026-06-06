@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, date, timezone, timedelta
 from tinydb import TinyDB, Query
 
 DB_PATH = os.getenv("DB_PATH", "brother-john.json")
@@ -16,6 +16,14 @@ def _get_db() -> TinyDB:
     return _db
 
 
+def _users(db: TinyDB):
+    return db.table("users")
+
+
+def _study_cache(db: TinyDB):
+    return db.table("study_cache")
+
+
 def init_db():
     """No-op for TinyDB — file is created on first write."""
     _get_db()
@@ -27,33 +35,40 @@ def init_db():
 
 def get_user(user_id: int) -> dict | None:
     User = Query()
-    result = _get_db().search(User.user_id == user_id)
+    result = _users(_get_db()).search(User.user_id == user_id)
     return result[0] if result else None
 
 
 def upsert_user(user_id: int, **kwargs):
     User = Query()
-    db = _get_db()
-    existing = db.search(User.user_id == user_id)
+    table = _users(_get_db())
+    existing = table.search(User.user_id == user_id)
     if existing:
         if kwargs:
-            db.update(kwargs, User.user_id == user_id)
+            table.update(kwargs, User.user_id == user_id)
     else:
         doc = {
             "user_id": user_id,
-            "chat_id": user_id,  # default to same as user_id, updated on /daily
+            "chat_id": user_id,
             "translation": "KJV",
             "timezone": "America/New_York",
             "daily_time": None,
             "requests": [],
+            "cache_used_date": None,
         }
         doc.update(kwargs)
-        db.insert(doc)
+        table.insert(doc)
 
 
 def get_daily_subscribers() -> list[dict]:
     User = Query()
-    return _get_db().search(User.daily_time.test(lambda v: v is not None))
+    return _users(_get_db()).search(User.daily_time.test(lambda v: v is not None))
+
+
+def get_active_translations() -> list[str]:
+    """Return distinct translations currently in use across all users."""
+    all_users = _users(_get_db()).all()
+    return list({u.get("translation", "KJV") for u in all_users})
 
 
 # ---------------------------------------------------------------------------
@@ -64,12 +79,11 @@ def check_rate_limit(user_id: int) -> tuple[bool, int]:
     """Check if user is within rate limit.
     Returns (allowed: bool, remaining: int).
     """
-    upsert_user(user_id)  # ensure user exists
+    upsert_user(user_id)
     user = get_user(user_id)
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(seconds=RATE_WINDOW)).isoformat()
 
-    # Prune old requests
     recent = [r for r in user.get("requests", []) if r >= cutoff]
     remaining = max(0, RATE_LIMIT - len(recent))
     allowed = len(recent) < RATE_LIMIT
@@ -78,6 +92,57 @@ def check_rate_limit(user_id: int) -> tuple[bool, int]:
         recent.append(now.isoformat())
 
     User = Query()
-    _get_db().update({"requests": recent}, User.user_id == user_id)
+    _users(_get_db()).update({"requests": recent}, User.user_id == user_id)
 
     return allowed, remaining
+
+
+# ---------------------------------------------------------------------------
+# Daily study cache
+# ---------------------------------------------------------------------------
+
+def get_cached_study(translation: str) -> dict | None:
+    """Return today's pre-generated study for a translation, or None."""
+    Cache = Query()
+    today = date.today().isoformat()
+    result = _study_cache(_get_db()).search(
+        (Cache.translation == translation.upper()) & (Cache.cached_date == today)
+    )
+    return result[0] if result else None
+
+
+def set_cached_study(translation: str, reference: str, study_text: str):
+    """Store a pre-generated study for today."""
+    Cache = Query()
+    today = date.today().isoformat()
+    table = _study_cache(_get_db())
+    table.remove((Cache.translation == translation.upper()))
+    table.insert({
+        "translation": translation.upper(),
+        "reference": reference,
+        "study_text": study_text,
+        "cached_date": today,
+        "cached_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def clear_study_cache():
+    """Clear all cached studies (called at midnight before pre-fetch)."""
+    _study_cache(_get_db()).truncate()
+
+
+def has_used_cache_today(user_id: int) -> bool:
+    """Return True if this user already consumed the cached study today."""
+    user = get_user(user_id)
+    if not user:
+        return False
+    return user.get("cache_used_date") == date.today().isoformat()
+
+
+def mark_cache_used(user_id: int):
+    """Record that this user has consumed today's cached study."""
+    User = Query()
+    _users(_get_db()).update(
+        {"cache_used_date": date.today().isoformat()},
+        User.user_id == user_id,
+    )

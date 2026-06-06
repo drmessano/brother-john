@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 import os
 import re
+import time
 import aiohttp
 
 API_BASE = "https://rest.api.bible/v1"
+HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 _bible_cache: dict | None = None
+
+# Verse text cache: (reference_lower, translation_upper) -> {result, expires_at}
+_verse_cache: dict[tuple, dict] = {}
+VERSE_CACHE_TTL = 6 * 3600  # 6 hours
 
 # USFM book ID mapping
 BOOK_IDS = {
@@ -73,7 +79,7 @@ async def get_available_bibles() -> list[dict]:
     if not api_key:
         return []
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
         async with session.get(f"{API_BASE}/bibles", headers={"api-key": api_key}) as resp:
             if resp.status != 200:
                 raise ValueError(f"Bible API error {resp.status}: {await resp.text()}")
@@ -112,16 +118,24 @@ async def fetch_passage(reference: str, translation: str = "KJV") -> dict:
     """
     Returns {"text": str, "reference": str, "translation": str}
     reference: e.g. "John 3:16" or "Romans 8:28-30"
+    Caches results for VERSE_CACHE_TTL seconds.
     """
-    api_key = os.getenv("BIBLE_API_KEY", "")
+    key = (reference.strip().lower(), translation.upper())
+    now = time.time()
+    if key in _verse_cache and _verse_cache[key]["expires_at"] > now:
+        return _verse_cache[key]["result"]
 
+    api_key = os.getenv("BIBLE_API_KEY", "")
     if api_key:
         bible_id = await find_bible_id(translation)
         if not bible_id:
             raise ValueError(f"Translation '{translation}' not found in api.bible")
-        return await _fetch_from_api(reference, bible_id, api_key, translation)
+        result = await _fetch_from_api(reference, bible_id, api_key, translation)
     else:
-        return await _fetch_fallback(reference, translation)
+        result = await _fetch_fallback(reference, translation)
+
+    _verse_cache[key] = {"result": result, "expires_at": now + VERSE_CACHE_TTL}
+    return result
 
 
 async def _fetch_from_api(reference: str, bible_id: str, api_key: str, translation: str) -> dict:
@@ -132,7 +146,7 @@ async def _fetch_from_api(reference: str, bible_id: str, api_key: str, translati
     if passage_id:
         url = f"{API_BASE}/bibles/{bible_id}/passages/{passage_id}"
         params = {"content-type": "html", "include-notes": "false", "include-titles": "false"}
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -145,7 +159,7 @@ async def _fetch_from_api(reference: str, bible_id: str, api_key: str, translati
     # Fallback to search
     search_url = f"{API_BASE}/bibles/{bible_id}/search"
     params = {"query": reference, "limit": 1}
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
         async with session.get(search_url, headers=headers, params=params) as resp:
             if resp.status != 200:
                 raise ValueError(f"Bible API error {resp.status}: {await resp.text()}")
@@ -171,7 +185,7 @@ async def _fetch_fallback(reference: str, translation: str) -> dict:
     url = "https://labs.bible.org/api/"
     params = {"passage": reference, "type": "json"}
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
         async with session.get(url, params=params) as resp:
             if resp.status != 200:
                 raise ValueError(f"Fallback Bible API error {resp.status}")

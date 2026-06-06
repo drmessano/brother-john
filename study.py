@@ -2,9 +2,27 @@
 Generate Bible study prompts using the Claude API.
 """
 import os
+import time
 import anthropic
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+CLAUDE_TIMEOUT = 30.0   # seconds per API call
+RETRY_ATTEMPTS = 2
+RETRY_DELAY = 3         # seconds between retries
+
+
+def _with_retry(fn):
+    """Call fn(), retrying once after RETRY_DELAY seconds on failure."""
+    last_exc = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            if attempt < RETRY_ATTEMPTS - 1:
+                time.sleep(RETRY_DELAY)
+    raise last_exc
 
 
 def generate_study_prompt(passage_text: str, reference: str, translation: str) -> str:
@@ -24,14 +42,17 @@ def generate_study_prompt(passage_text: str, reference: str, translation: str) -
 
     user = f"Passage ({translation}):\n\n{reference}\n\n{passage_text}"
 
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
+    def _call():
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            timeout=CLAUDE_TIMEOUT,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return message.content[0].text
 
-    return message.content[0].text
+    return _with_retry(_call)
 
 
 def generate_daily_passage_and_study(translation: str = "KJV", user_id: int = 0) -> str:
@@ -44,7 +65,6 @@ def generate_daily_passage_and_study(translation: str = "KJV", user_id: int = 0)
 
     today = date.today().isoformat()
 
-    # Books of the Bible to draw from — shuffle deterministically per user+date
     books = [
         "Genesis", "Exodus", "Psalms", "Proverbs", "Isaiah", "Jeremiah",
         "Matthew", "Mark", "Luke", "John", "Acts", "Romans", "1 Corinthians",
@@ -61,15 +81,17 @@ def generate_daily_passage_and_study(translation: str = "KJV", user_id: int = 0)
         "Reply with ONLY the reference, e.g. 'Romans 8:28-39'."
     )
 
-    selection = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=50,
-        system=system,
-        messages=[{"role": "user", "content": f"Choose a study passage from the book of {suggested_book} for {today}."}],
-    )
+    def _call():
+        selection = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=50,
+            timeout=CLAUDE_TIMEOUT,
+            system=system,
+            messages=[{"role": "user", "content": f"Choose a study passage from the book of {suggested_book} for {today}."}],
+        )
+        return selection.content[0].text.strip()
 
-    reference = selection.content[0].text.strip()
-    return reference
+    return _with_retry(_call)
 
 
 def generate_study_from_reference(reference: str, passage_text: str, translation: str) -> str:
