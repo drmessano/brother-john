@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv("config")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, BotCommand
+from telegram.error import Forbidden, BadRequest
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -718,6 +719,27 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # ---------------------------------------------------------------------------
+# Keyboard refresh on restart
+# ---------------------------------------------------------------------------
+
+async def _keyboard_refresh_job(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
+    user_id = context.job.user_id
+    try:
+        await context.bot.send_message(
+            chat_id,
+            "🙏 Brother John is ready\\.",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=MAIN_KEYBOARD,
+        )
+    except (Forbidden, BadRequest) as e:
+        logger.info(f"Purging inactive user {user_id}: {e}")
+        db.delete_user(user_id)
+    except Exception as e:
+        logger.warning(f"Keyboard refresh failed for chat {chat_id}: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Midnight pre-fetch job
 # ---------------------------------------------------------------------------
 
@@ -769,6 +791,24 @@ async def post_init(app: Application):
         name="prefetch_daily",
     )
     logger.info("Scheduled midnight pre-fetch job")
+
+    # Schedule staggered keyboard refresh for all users
+    import random
+    all_users = db.get_all_users()
+    for user in all_users:
+        chat_id = user.get("chat_id") or user.get("user_id")
+        user_id = user.get("user_id")
+        if not chat_id or not user_id:
+            continue
+        delay = random.uniform(20, 60)
+        app.job_queue.run_once(
+            _keyboard_refresh_job,
+            when=delay,
+            chat_id=chat_id,
+            user_id=user_id,
+            name=f"keyboard_refresh_{chat_id}",
+        )
+    logger.info(f"Scheduled keyboard refresh for {len(all_users)} users")
 
     subscribers = db.get_daily_subscribers()
     logger.info(f"Restoring {len(subscribers)} daily jobs")

@@ -1,6 +1,9 @@
+import logging
 import os
 from datetime import datetime, date, timezone, timedelta
 from tinydb import TinyDB, Query
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "brother-john.json")
 RATE_LIMIT = 20          # max study/verse requests
@@ -63,6 +66,16 @@ def upsert_user(user_id: int, **kwargs):
 def get_daily_subscribers() -> list[dict]:
     User = Query()
     return _users(_get_db()).search(User.daily_time.test(lambda v: v is not None))
+
+
+def get_all_users() -> list[dict]:
+    return _users(_get_db()).all()
+
+
+def delete_user(user_id: int):
+    User = Query()
+    _users(_get_db()).remove(User.user_id == user_id)
+    logger.info(f"Deleted user {user_id} from DB")
 
 
 def get_active_translations() -> list[str]:
