@@ -249,12 +249,7 @@ async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.edit_message_text(f"⚠️ Couldn't choose a passage: {e}", chat_id=chat_id, message_id=status.message_id)
         return
 
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
-    except Exception:
-        pass
-
-    await _send_study(context, chat_id, reference, translation)
+    await _send_study(context, chat_id, reference, translation, status_message=status)
 
 
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
