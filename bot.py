@@ -49,7 +49,7 @@ DEFAULT_TZ = "America/New_York"
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
-        ["📖 Study", "📅 Daily", "🔍 Verse"],
+        ["📖 Study", "📅 Daily", "🔍 Lookup"],
         ["⚙️ Settings"],
     ],
     resize_keyboard=True,
@@ -118,9 +118,12 @@ def _schedule_daily_job(app_or_context, user_id: int, chat_id: int, daily_time: 
     )
 
 
-async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reference: str, translation: str):
+async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reference: str, translation: str, status_message=None):
     """Fetch passage, generate study, send to chat."""
-    status = await context.bot.send_message(chat_id, "📖 Fetching passage and generating your study...")
+    if status_message is not None:
+        status = status_message
+    else:
+        status = await context.bot.send_message(chat_id, "📖 Preparing your study...")
 
     async def _edit(text: str):
         try:
@@ -210,7 +213,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Commands:*\n"
         "• /study — Generate a fresh personalized study\n"
         "• /daily — Show today's pre\\-generated daily study\n"
-        "• /verse `John 3:16` — Deep\\-dive into any passage\n"
+        "• /lookup `John 3:16` — Look up any Bible passage\n"
         "• /schedule `8:00` — Set your daily study time\n"
         "• /schedule on/off — Enable or disable daily studies\n"
         "• /settings — View and change your settings\n"
@@ -233,7 +236,7 @@ async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
     translation = _get_translation(user_id)
     chat_id = update.effective_chat.id
 
-    status = await update.message.reply_text("🙏 Choosing today's passage...")
+    status = await update.message.reply_text("📖 Preparing your study...")
     loop = asyncio.get_event_loop()
     try:
         reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id))
@@ -256,44 +259,67 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     translation = _get_translation(user_id)
     chat_id = update.effective_chat.id
 
+    status = await update.message.reply_text("📅 Retrieving today's daily study...")
+
     cached = db.get_cached_study(translation)
     if cached:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
+        except Exception:
+            pass
         sent = await _send_cached_study(context, chat_id, cached)
         if sent:
             return
 
-    # No cache yet — generate one now
+    # No cache — generate transparently, reusing the same status message
     loop = asyncio.get_event_loop()
     try:
         reference = await loop.run_in_executor(
             None, lambda: generate_daily_passage_and_study(translation, user_id=0)
         )
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Couldn't generate today's study: {e}")
+        try:
+            await context.bot.edit_message_text(f"⚠️ Couldn't retrieve today's study: {e}", chat_id=chat_id, message_id=status.message_id)
+        except Exception:
+            pass
         return
 
-    await _send_study(context, chat_id, reference, translation)
+    await _send_study(context, chat_id, reference, translation, status_message=status)
 
 
-async def cmd_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Look up a Bible passage and display the text only — no AI study."""
     user_id = update.effective_user.id
     db.upsert_user(user_id)
-
-    allowed, _ = db.check_rate_limit(user_id)
-    if not allowed:
-        await update.message.reply_text("⏱ You've reached the limit of 20 studies per hour. Please try again later.")
-        return
-
     translation = _get_translation(user_id)
+    chat_id = update.effective_chat.id
 
     if not context.args:
         await update.message.reply_text(
-            "Please provide a reference, e.g.:\n/verse John 3:16\n/verse Romans 8:28-30"
+            "Please provide a reference, e.g.:\n/lookup John 3:16\n/lookup Romans 8:28-30"
         )
         return
 
     reference = " ".join(context.args)
-    await _send_study(context, update.effective_chat.id, reference, translation)
+    status = await update.message.reply_text(f"🔍 Looking up {reference}...")
+
+    try:
+        passage = await fetch_passage(reference, translation)
+    except Exception as e:
+        try:
+            await context.bot.edit_message_text(f"⚠️ Couldn't find that passage: {e}", chat_id=chat_id, message_id=status.message_id)
+        except Exception:
+            pass
+        return
+
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
+    except Exception:
+        pass
+
+    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
+    text = f"{header}{_escape(passage['text'])}"
+    await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
 
 
 async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -722,8 +748,8 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
         await cmd_study(update, context)
     elif text == "📅 Daily":
         await cmd_daily(update, context)
-    elif text == "🔍 Verse":
-        await update.message.reply_text("Send me a reference, e.g.:\n/verse John 3:16")
+    elif text == "🔍 Lookup":
+        await update.message.reply_text("Send me a reference, e.g.:\n/lookup John 3:16")
     elif text == "⚙️ Settings":
         await cmd_settings(update, context)
 
@@ -814,7 +840,7 @@ async def post_init(app: Application):
     await app.bot.set_my_commands([
         BotCommand("study",    "Generate a fresh personalized Bible study"),
         BotCommand("daily",    "Show today's pre-generated daily study"),
-        BotCommand("verse",    "Study a specific passage, e.g. /verse John 3:16"),
+        BotCommand("lookup",   "Look up a passage, e.g. /lookup John 3:16"),
         BotCommand("schedule", "Manage daily schedule: /schedule 8:00 | on | off | timezone"),
         BotCommand("settings", "View and change your settings"),
         BotCommand("help",     "Show help"),
@@ -862,7 +888,7 @@ def main():
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("study", cmd_study))
     app.add_handler(CommandHandler("daily", cmd_daily))
-    app.add_handler(CommandHandler("verse", cmd_verse))
+    app.add_handler(CommandHandler("lookup", cmd_lookup))
     app.add_handler(CommandHandler("schedule", cmd_schedule))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("translation", cmd_translation))
@@ -879,7 +905,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_settings_daily_time, pattern=r"^settings_daily_time$"))
 
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(📖 Study|📅 Daily|🔍 Verse|⚙️ Settings)$"),
+        filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings)$"),
         handle_keyboard_button,
     ))
     # Catch-all for awaiting schedule time input

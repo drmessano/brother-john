@@ -70,12 +70,13 @@ To stop him:
 
 | Command | What Brother John does |
 |---------|----------------------|
-| `/study` | Chooses a passage and delivers a full study |
-| `/verse Romans 8:28` | Deep-dive study on any passage you pick |
-| `/daily 8:00` | Show up every morning at 8:00 AM UTC |
-| `/daily off` | Take a break |
-| `/translation` | Switch Bible translation — list is pulled live from the API |
-| `/settings` | Check your current preferences |
+| `/study` | Generates a fresh personalized Bible study |
+| `/daily` | Shows today's pre-generated daily study |
+| `/lookup Romans 8:28` | Looks up any passage and returns the text |
+| `/schedule 8:00` | Set your daily study time |
+| `/schedule on\|off` | Enable or disable daily studies |
+| `/schedule timezone` | Change your timezone |
+| `/settings` | View and change your settings |
 
 ---
 
