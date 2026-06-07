@@ -675,22 +675,32 @@ async def _daily_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     translation = _get_translation(user_id)
 
-    await context.bot.send_message(chat_id, "🌅 *Good morning\\! Here is today\\'s Bible study\\.*", parse_mode=ParseMode.MARKDOWN_V2)
+    try:
+        await context.bot.send_message(chat_id, "🌅 *Good morning\\! Here is today\\'s Bible study\\.*", parse_mode=ParseMode.MARKDOWN_V2)
 
-    cached = db.get_cached_study(translation)
-    if cached:
-        sent = await _send_cached_study(context, chat_id, cached)
-        if sent:
+        cached = db.get_cached_study(translation)
+        if cached:
+            sent = await _send_cached_study(context, chat_id, cached)
+            if sent:
+                return
+
+        loop = asyncio.get_event_loop()
+        try:
+            reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id))
+        except Exception as e:
+            await context.bot.send_message(chat_id, f"⚠️ Daily study error: {e}")
             return
 
-    loop = asyncio.get_event_loop()
-    try:
-        reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id))
-    except Exception as e:
-        await context.bot.send_message(chat_id, f"⚠️ Daily study error: {e}")
-        return
+        await _send_study(context, chat_id, reference, translation)
 
-    await _send_study(context, chat_id, reference, translation)
+    except (Forbidden, BadRequest) as e:
+        logger.info(f"Purging user {user_id} after failed daily delivery: {e}")
+        db.delete_user(user_id)
+        jobs = context.job_queue.get_jobs_by_name(f"daily_{user_id}")
+        for job in jobs:
+            job.schedule_removal()
+    except Exception as e:
+        logger.warning(f"Daily job error for user {user_id}: {e}")
 
 
 # ---------------------------------------------------------------------------
