@@ -171,10 +171,10 @@ async def _send_cached_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, c
     full_message = header + verse_block + _escape(divider) + body
 
     if len(full_message) <= 4096:
-        await context.bot.send_message(chat_id, full_message, parse_mode=ParseMode.MARKDOWN_V2)
+        await context.bot.send_message(chat_id, full_message, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
     else:
         await context.bot.send_message(chat_id, header + verse_block, parse_mode=ParseMode.MARKDOWN_V2)
-        await context.bot.send_message(chat_id, study_text)
+        await context.bot.send_message(chat_id, study_text, reply_markup=MAIN_KEYBOARD)
     return True
 
 
@@ -187,10 +187,10 @@ async def _deliver_study(bot, chat_id: int, passage: dict, study_text: str):
     full_message = header + verse_block + _escape(divider) + body
 
     if len(full_message) <= 4096:
-        await bot.send_message(chat_id, full_message, parse_mode=ParseMode.MARKDOWN_V2)
+        await bot.send_message(chat_id, full_message, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
     else:
         await bot.send_message(chat_id, header + verse_block, parse_mode=ParseMode.MARKDOWN_V2)
-        await bot.send_message(chat_id, study_text)
+        await bot.send_message(chat_id, study_text, reply_markup=MAIN_KEYBOARD)
 
 
 # ---------------------------------------------------------------------------
