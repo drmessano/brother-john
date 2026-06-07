@@ -728,9 +728,10 @@ async def _keyboard_refresh_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             chat_id,
-            "🙏 Brother John is ready\\.",
+            "🙏 Brother John has been updated\\!",
             parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=MAIN_KEYBOARD,
+            disable_notification=True,
         )
     except (Forbidden, BadRequest) as e:
         logger.info(f"Purging inactive user {user_id}: {e}")
