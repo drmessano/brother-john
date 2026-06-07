@@ -356,9 +356,9 @@ def _lk_groups(items: list, start: int, end: int) -> list[tuple[int, int]]:
     return groups
 
 
-def _lk_rows(buttons: list) -> list[list]:
-    """Arrange individual item buttons into rows of LK_COLS."""
-    return [buttons[i:i + LK_COLS] for i in range(0, len(buttons), LK_COLS)]
+def _lk_rows(buttons: list, cols: int = LK_COLS) -> list[list]:
+    """Arrange buttons into rows of `cols`."""
+    return [buttons[i:i + cols] for i in range(0, len(buttons), cols)]
 
 
 def _lk_testament_keyboard() -> InlineKeyboardMarkup:
@@ -380,7 +380,7 @@ def _lk_book_keyboard(t: str, s: int, e: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(books[i][1], callback_data=f"lk:ch:{books[i][0]}:0:-1")
             for i, _ in groups
         ]
-        rows = _lk_rows(buttons)
+        rows = _lk_rows(buttons, cols=2)
     else:
         rows = [
             [InlineKeyboardButton(
@@ -445,9 +445,8 @@ def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int)
             for gs, ge in groups
         ]
 
-    # Back label: "« Chapter N"
-    ch_num = chapter_id.split(".")[-1] if "." in chapter_id else chapter_id
-    rows.append([InlineKeyboardButton(f"« Chapter {ch_num}", callback_data=f"lk:back:ch:{usfm}:{chapter_id}")])
+    book_name = USFM_TO_NAME.get(usfm, usfm)
+    rows.append([InlineKeyboardButton(f"« {book_name} — Chapters", callback_data=f"lk:back:ch:{usfm}:{chapter_id}")])
     return InlineKeyboardMarkup(rows)
 
 
