@@ -13,6 +13,70 @@ _bible_cache: dict | None = None
 _verse_cache: dict[tuple, dict] = {}
 VERSE_CACHE_TTL = 6 * 3600  # 6 hours
 
+# Ordered book lists for the picker: (usfm, display_name)
+OT_BOOKS = [
+    ("GEN","Genesis"), ("EXO","Exodus"), ("LEV","Leviticus"), ("NUM","Numbers"),
+    ("DEU","Deuteronomy"), ("JOS","Joshua"), ("JDG","Judges"), ("RUT","Ruth"),
+    ("1SA","1 Samuel"), ("2SA","2 Samuel"), ("1KI","1 Kings"), ("2KI","2 Kings"),
+    ("1CH","1 Chronicles"), ("2CH","2 Chronicles"), ("EZR","Ezra"), ("NEH","Nehemiah"),
+    ("EST","Esther"), ("JOB","Job"), ("PSA","Psalms"), ("PRO","Proverbs"),
+    ("ECC","Ecclesiastes"), ("SNG","Song of Solomon"), ("ISA","Isaiah"),
+    ("JER","Jeremiah"), ("LAM","Lamentations"), ("EZK","Ezekiel"), ("DAN","Daniel"),
+    ("HOS","Hosea"), ("JOL","Joel"), ("AMO","Amos"), ("OBA","Obadiah"),
+    ("JON","Jonah"), ("MIC","Micah"), ("NAH","Nahum"), ("HAB","Habakkuk"),
+    ("ZEP","Zephaniah"), ("HAG","Haggai"), ("ZEC","Zechariah"), ("MAL","Malachi"),
+]
+NT_BOOKS = [
+    ("MAT","Matthew"), ("MRK","Mark"), ("LUK","Luke"), ("JHN","John"),
+    ("ACT","Acts"), ("ROM","Romans"), ("1CO","1 Corinthians"), ("2CO","2 Corinthians"),
+    ("GAL","Galatians"), ("EPH","Ephesians"), ("PHP","Philippians"), ("COL","Colossians"),
+    ("1TH","1 Thessalonians"), ("2TH","2 Thessalonians"), ("1TI","1 Timothy"),
+    ("2TI","2 Timothy"), ("TIT","Titus"), ("PHM","Philemon"), ("HEB","Hebrews"),
+    ("JAS","James"), ("1PE","1 Peter"), ("2PE","2 Peter"), ("1JN","1 John"),
+    ("2JN","2 John"), ("3JN","3 John"), ("JUD","Jude"), ("REV","Revelation"),
+]
+
+# Reverse map: USFM -> display name
+USFM_TO_NAME = {usfm: name for usfm, name in OT_BOOKS + NT_BOOKS}
+
+# Chapter and verse caches
+_chapters_cache: dict[str, list] = {}  # key: "{bible_id}:{usfm}"
+_verses_cache:   dict[str, list] = {}  # key: "{bible_id}:{chapter_id}"
+
+
+async def get_book_chapters(bible_id: str, usfm: str, api_key: str) -> list[dict]:
+    """Return list of chapter dicts for a book. Cached."""
+    key = f"{bible_id}:{usfm}"
+    if key in _chapters_cache:
+        return _chapters_cache[key]
+    url = f"{API_BASE}/bibles/{bible_id}/books/{usfm}/chapters"
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+        async with session.get(url, headers={"api-key": api_key}) as resp:
+            if resp.status != 200:
+                raise ValueError(f"Bible API error {resp.status}: {await resp.text()}")
+            data = await resp.json()
+    # Filter out intro entries (id like "GEN.intro")
+    chapters = [c for c in data.get("data", []) if not c["id"].endswith("intro")]
+    _chapters_cache[key] = chapters
+    return chapters
+
+
+async def get_chapter_verses(bible_id: str, chapter_id: str, api_key: str) -> list[dict]:
+    """Return list of verse dicts for a chapter. Cached."""
+    key = f"{bible_id}:{chapter_id}"
+    if key in _verses_cache:
+        return _verses_cache[key]
+    url = f"{API_BASE}/bibles/{bible_id}/chapters/{chapter_id}/verses"
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+        async with session.get(url, headers={"api-key": api_key}) as resp:
+            if resp.status != 200:
+                raise ValueError(f"Bible API error {resp.status}: {await resp.text()}")
+            data = await resp.json()
+    verses = data.get("data", [])
+    _verses_cache[key] = verses
+    return verses
+
+
 # USFM book ID mapping
 BOOK_IDS = {
     "genesis": "GEN", "exodus": "EXO", "leviticus": "LEV", "numbers": "NUM",

@@ -22,8 +22,13 @@ from telegram.ext import (
     filters,
 )
 
+import math
 import db
-from bible_api import fetch_passage, get_available_bibles, _clean_translation_label
+from bible_api import (
+    fetch_passage, get_available_bibles, _clean_translation_label,
+    OT_BOOKS, NT_BOOKS, USFM_TO_NAME,
+    get_book_chapters, get_chapter_verses, find_bible_id,
+)
 from study import generate_daily_passage_and_study, generate_study_from_reference
 
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
@@ -288,7 +293,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Look up a Bible passage and display the text only — no AI study."""
+    """Look up a Bible passage — picker if no args, direct fetch if reference given."""
     user_id = update.effective_user.id
     db.upsert_user(user_id)
     translation = _get_translation(user_id)
@@ -296,30 +301,309 @@ async def cmd_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "Please provide a reference, e.g.:\n/lookup John 3:16\n/lookup Romans 8:28-30"
+            "📖 Choose a passage:",
+            reply_markup=_lk_testament_keyboard(),
         )
         return
 
     reference = " ".join(context.args)
-    status = await update.message.reply_text(f"🔍 Looking up {reference}...")
+    await _do_lookup(context.bot, chat_id, reference, translation, reply_to=update.message)
 
+
+async def _do_lookup(bot, chat_id: int, reference: str, translation: str, reply_to=None):
+    """Fetch and display a passage (text only, no study)."""
+    send = reply_to.reply_text if reply_to else lambda t, **kw: bot.send_message(chat_id, t, **kw)
+    status = await send(f"🔍 Looking up {reference}...")
     try:
         passage = await fetch_passage(reference, translation)
     except Exception as e:
         try:
-            await context.bot.edit_message_text(f"⚠️ Couldn't find that passage: {e}", chat_id=chat_id, message_id=status.message_id)
+            await bot.edit_message_text(f"⚠️ Couldn't find that passage: {e}", chat_id=chat_id, message_id=status.message_id)
         except Exception:
             pass
         return
-
     try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
+        await bot.delete_message(chat_id=chat_id, message_id=status.message_id)
     except Exception:
         pass
+    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
+    text = f"{header}{_escape(passage['text'])}"
+    await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
+
+
+# ---------------------------------------------------------------------------
+# Lookup picker — Testament > Book > Chapter > Verse
+# ---------------------------------------------------------------------------
+
+LK_PAGE       = 50   # show items directly if count <= this
+LK_COLS       = 5    # buttons per row for individual items
+LK_GROUP_ROWS = 10   # max group buttons when count > LK_PAGE
+
+
+def _lk_groups(items: list, start: int, end: int) -> list[tuple[int, int]]:
+    """Return list of (s, e) index ranges.
+    If count <= LK_PAGE: individual pairs (i, i).
+    Else: groups of ceil(count/LK_GROUP_ROWS).
+    """
+    count = end - start + 1
+    if count <= LK_PAGE:
+        return [(i, i) for i in range(start, end + 1)]
+    size = math.ceil(count / LK_GROUP_ROWS)
+    groups, i = [], start
+    while i <= end:
+        groups.append((i, min(i + size - 1, end)))
+        i += size
+    return groups
+
+
+def _lk_rows(buttons: list) -> list[list]:
+    """Arrange individual item buttons into rows of LK_COLS."""
+    return [buttons[i:i + LK_COLS] for i in range(0, len(buttons), LK_COLS)]
+
+
+def _lk_testament_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📜 Old Testament", callback_data="lk:t:O"),
+            InlineKeyboardButton("✝️ New Testament", callback_data="lk:t:N"),
+        ]
+    ])
+
+
+def _lk_book_keyboard(t: str, s: int, e: int) -> InlineKeyboardMarkup:
+    books = OT_BOOKS if t == "O" else NT_BOOKS
+    groups = _lk_groups(books, s, e)
+    individual = (groups[0][0] == groups[0][1]) if groups else True
+
+    if individual:
+        buttons = [
+            InlineKeyboardButton(books[i][1], callback_data=f"lk:ch:{books[i][0]}:0:-1")
+            for i, _ in groups
+        ]
+        rows = _lk_rows(buttons)
+    else:
+        rows = [
+            [InlineKeyboardButton(
+                f"{books[gs][1]} – {books[ge][1]}",
+                callback_data=f"lk:bk:{t}:{gs}:{ge}"
+            )]
+            for gs, ge in groups
+        ]
+
+    rows.append([InlineKeyboardButton("« Testaments", callback_data="lk:back:t")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _lk_chapter_keyboard(usfm: str, chapters: list, s: int, e: int) -> InlineKeyboardMarkup:
+    groups = _lk_groups(chapters, s, e)
+    individual = (groups[0][0] == groups[0][1]) if groups else True
+
+    if individual:
+        buttons = [
+            InlineKeyboardButton(
+                chapters[i]["number"] if "number" in chapters[i] else str(i + 1),
+                callback_data=f"lk:vs:{usfm}:{chapters[i]['id']}:0:-1"
+            )
+            for i, _ in groups
+        ]
+        rows = _lk_rows(buttons)
+    else:
+        rows = [
+            [InlineKeyboardButton(
+                f"{chapters[gs].get('number', gs+1)} – {chapters[ge].get('number', ge+1)}",
+                callback_data=f"lk:ch:{usfm}:{gs}:{ge}"
+            )]
+            for gs, ge in groups
+        ]
+
+    book_name = USFM_TO_NAME.get(usfm, usfm)
+    rows.append([InlineKeyboardButton(f"« {book_name}", callback_data=f"lk:back:bk:{usfm}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int) -> InlineKeyboardMarkup:
+    groups = _lk_groups(verses, s, e)
+    individual = (groups[0][0] == groups[0][1]) if groups else True
+
+    if individual:
+        buttons = [
+            InlineKeyboardButton(
+                verses[i].get("reference", "").split(":")[-1] or str(i + 1),
+                callback_data=f"lk:v:{verses[i]['id']}"
+            )
+            for i, _ in groups
+        ]
+        rows = _lk_rows(buttons)
+    else:
+        def _vnum(idx):
+            return verses[idx].get("reference", "").split(":")[-1] or str(idx + 1)
+        rows = [
+            [InlineKeyboardButton(
+                f"v{_vnum(gs)} – v{_vnum(ge)}",
+                callback_data=f"lk:vs:{usfm}:{chapter_id}:{gs}:{ge}"
+            )]
+            for gs, ge in groups
+        ]
+
+    # Back label: "« Chapter N"
+    ch_num = chapter_id.split(".")[-1] if "." in chapter_id else chapter_id
+    rows.append([InlineKeyboardButton(f"« Chapter {ch_num}", callback_data=f"lk:back:ch:{usfm}:{chapter_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def callback_lk_testament(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    t = query.data.split(":")[2]  # O or N
+    books = OT_BOOKS if t == "O" else NT_BOOKS
+    label = "Old Testament" if t == "O" else "New Testament"
+    await query.edit_message_text(
+        f"📖 {label} — choose a book:",
+        reply_markup=_lk_book_keyboard(t, 0, len(books) - 1),
+    )
+
+
+async def callback_lk_book_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, _, t, s, e = query.data.split(":")
+    s, e = int(s), int(e)
+    books = OT_BOOKS if t == "O" else NT_BOOKS
+    label = "Old Testament" if t == "O" else "New Testament"
+    await query.edit_message_text(
+        f"📖 {label} — choose a book:",
+        reply_markup=_lk_book_keyboard(t, s, e),
+    )
+
+
+async def callback_lk_chapter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lk:ch:{usfm}:{s}:{e}  — s/e are indices into chapters list; -1 means full range."""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":")
+    usfm, s, e = parts[2], int(parts[3]), int(parts[4])
+
+    api_key = os.getenv("BIBLE_API_KEY", "")
+    bible_id = await find_bible_id(_get_translation(query.from_user.id))
+    if not bible_id or not api_key:
+        await query.answer("Bible API not configured.", show_alert=True)
+        return
+
+    try:
+        chapters = await get_book_chapters(bible_id, usfm, api_key)
+    except Exception as ex:
+        await query.answer(f"Error: {ex}", show_alert=True)
+        return
+
+    if e == -1:
+        e = len(chapters) - 1
+
+    book_name = USFM_TO_NAME.get(usfm, usfm)
+    await query.edit_message_text(
+        f"📖 {book_name} — choose a chapter:",
+        reply_markup=_lk_chapter_keyboard(usfm, chapters, s, e),
+    )
+
+
+async def callback_lk_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lk:vs:{usfm}:{chapter_id}:{s}:{e}"""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":")
+    usfm, chapter_id, s, e = parts[2], parts[3], int(parts[4]), int(parts[5])
+
+    api_key = os.getenv("BIBLE_API_KEY", "")
+    bible_id = await find_bible_id(_get_translation(query.from_user.id))
+    if not bible_id or not api_key:
+        await query.answer("Bible API not configured.", show_alert=True)
+        return
+
+    try:
+        verses = await get_chapter_verses(bible_id, chapter_id, api_key)
+    except Exception as ex:
+        await query.answer(f"Error: {ex}", show_alert=True)
+        return
+
+    if e == -1:
+        e = len(verses) - 1
+
+    ch_num = chapter_id.split(".")[-1] if "." in chapter_id else chapter_id
+    book_name = USFM_TO_NAME.get(usfm, usfm)
+    await query.edit_message_text(
+        f"📖 {book_name} {ch_num} — choose a verse:",
+        reply_markup=_lk_verse_keyboard(usfm, chapter_id, verses, s, e),
+    )
+
+
+async def callback_lk_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lk:v:{verse_id}  e.g. lk:v:JHN.3.16"""
+    query = update.callback_query
+    await query.answer()
+    verse_id = query.data[5:]  # strip "lk:v:"
+
+    # Convert verse_id (JHN.3.16) to reference (John 3:16)
+    parts = verse_id.split(".")
+    usfm = parts[0]
+    reference = f"{USFM_TO_NAME.get(usfm, usfm)} {'.'.join(parts[1:]).replace('.', ':')}"
+
+    translation = _get_translation(query.from_user.id)
+    chat_id = query.message.chat_id
+
+    await query.edit_message_text(f"🔍 Looking up {reference}...")
+    try:
+        passage = await fetch_passage(reference, translation)
+    except Exception as e:
+        await query.edit_message_text(f"⚠️ Couldn't find that passage: {e}")
+        return
 
     header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
     text = f"{header}{_escape(passage['text'])}"
     await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+
+async def callback_lk_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lk:back:{level}[:{args}]"""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":")
+    level = parts[2]
+
+    if level == "t":
+        await query.edit_message_text("📖 Choose a testament:", reply_markup=_lk_testament_keyboard())
+
+    elif level == "bk":
+        # Back to books for this book's testament
+        usfm = parts[3]
+        t = "N" if any(u == usfm for u, _ in NT_BOOKS) else "O"
+        books = OT_BOOKS if t == "O" else NT_BOOKS
+        label = "Old Testament" if t == "O" else "New Testament"
+        await query.edit_message_text(
+            f"📖 {label} — choose a book:",
+            reply_markup=_lk_book_keyboard(t, 0, len(books) - 1),
+        )
+
+    elif level == "ch":
+        # Back to chapters for this book
+        usfm = parts[3]
+        api_key = os.getenv("BIBLE_API_KEY", "")
+        bible_id = await find_bible_id(_get_translation(query.from_user.id))
+        if not bible_id or not api_key:
+            await query.answer("Bible API not configured.", show_alert=True)
+            return
+        try:
+            chapters = await get_book_chapters(bible_id, usfm, api_key)
+        except Exception as ex:
+            await query.answer(f"Error: {ex}", show_alert=True)
+            return
+        book_name = USFM_TO_NAME.get(usfm, usfm)
+        await query.edit_message_text(
+            f"📖 {book_name} — choose a chapter:",
+            reply_markup=_lk_chapter_keyboard(usfm, chapters, 0, len(chapters) - 1),
+        )
 
 
 async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -749,7 +1033,7 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
     elif text == "📅 Daily":
         await cmd_daily(update, context)
     elif text == "🔍 Lookup":
-        await update.message.reply_text("Send me a reference, e.g.:\n/lookup John 3:16")
+        await update.message.reply_text("📖 Choose a passage:", reply_markup=_lk_testament_keyboard())
     elif text == "⚙️ Settings":
         await cmd_settings(update, context)
 
@@ -903,6 +1187,12 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_settings_timezone, pattern=r"^settings_timezone$"))
     app.add_handler(CallbackQueryHandler(callback_settings_daily_toggle, pattern=r"^settings_daily_toggle$"))
     app.add_handler(CallbackQueryHandler(callback_settings_daily_time, pattern=r"^settings_daily_time$"))
+    app.add_handler(CallbackQueryHandler(callback_lk_testament,  pattern=r"^lk:t:"))
+    app.add_handler(CallbackQueryHandler(callback_lk_book_group, pattern=r"^lk:bk:"))
+    app.add_handler(CallbackQueryHandler(callback_lk_chapter,    pattern=r"^lk:ch:"))
+    app.add_handler(CallbackQueryHandler(callback_lk_verse,      pattern=r"^lk:vs:"))
+    app.add_handler(CallbackQueryHandler(callback_lk_fetch,      pattern=r"^lk:v:"))
+    app.add_handler(CallbackQueryHandler(callback_lk_back,       pattern=r"^lk:back:"))
 
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings)$"),
