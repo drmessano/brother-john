@@ -24,8 +24,11 @@ cd brother-john
 
 ### 2. Install dependencies
 
+Create a virtual environment and install dependencies into it (required on Ubuntu 24.04+):
+
 ```bash
-pip install -r requirements.txt
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
 ```
 
 ### 3. Get your API keys

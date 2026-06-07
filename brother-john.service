@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/brother-john
-ExecStart=/opt/brother-john/bot.py run
+ExecStart=/opt/brother-john/venv/bin/python3 /opt/brother-john/bot.py run
 Restart=on-failure
 RestartSec=10
 
