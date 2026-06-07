@@ -719,25 +719,50 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # ---------------------------------------------------------------------------
-# Keyboard refresh on restart
+# Notify all users (manual CLI: ./bot.py notify)
 # ---------------------------------------------------------------------------
 
-async def _keyboard_refresh_job(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
-    user_id = context.job.user_id
-    try:
-        await context.bot.send_message(
-            chat_id,
-            "🙏 Brother John has been updated\\!",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=MAIN_KEYBOARD,
-            disable_notification=True,
-        )
-    except (Forbidden, BadRequest) as e:
-        logger.info(f"Purging inactive user {user_id}: {e}")
-        db.delete_user(user_id)
-    except Exception as e:
-        logger.warning(f"Keyboard refresh failed for chat {chat_id}: {e}")
+NOTIFY_MESSAGE = "✝️ We've updated Brother John to improve your experience ✝️"
+
+
+async def _run_notify():
+    import random
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        print("TELEGRAM_BOT_TOKEN not set")
+        raise SystemExit(1)
+    from telegram import Bot
+    bot = Bot(token=token)
+    all_users = db.get_all_users()
+    print(f"Sending notification to {len(all_users)} users...")
+    for user in all_users:
+        chat_id = user.get("chat_id") or user.get("user_id")
+        user_id = user.get("user_id")
+        if not chat_id:
+            continue
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        try:
+            await bot.send_message(
+                chat_id,
+                _escape(NOTIFY_MESSAGE),
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=MAIN_KEYBOARD,
+                disable_notification=True,
+            )
+            logger.info(f"Notified user {user_id}")
+        except (Forbidden, BadRequest) as e:
+            logger.info(f"Purging inactive user {user_id}: {e}")
+            db.delete_user(user_id)
+            print(f"  Purged inactive user {user_id}")
+        except Exception as e:
+            logger.warning(f"Notify failed for {user_id}: {e}")
+            print(f"  Failed for {user_id}: {e}")
+    print("Done.")
+
+
+def cli_notify():
+    db.init_db()
+    asyncio.run(_run_notify())
 
 
 # ---------------------------------------------------------------------------
@@ -792,24 +817,6 @@ async def post_init(app: Application):
         name="prefetch_daily",
     )
     logger.info("Scheduled midnight pre-fetch job")
-
-    # Schedule staggered keyboard refresh for all users
-    import random
-    all_users = db.get_all_users()
-    for user in all_users:
-        chat_id = user.get("chat_id") or user.get("user_id")
-        user_id = user.get("user_id")
-        if not chat_id or not user_id:
-            continue
-        delay = random.uniform(20, 60)
-        app.job_queue.run_once(
-            _keyboard_refresh_job,
-            when=delay,
-            chat_id=chat_id,
-            user_id=user_id,
-            name=f"keyboard_refresh_{chat_id}",
-        )
-    logger.info(f"Scheduled keyboard refresh for {len(all_users)} users")
 
     subscribers = db.get_daily_subscribers()
     logger.info(f"Restoring {len(subscribers)} daily jobs")
@@ -928,8 +935,8 @@ def cli_stop():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] not in ("start", "stop", "run"):
-        print("Usage: bot.py start|stop|run")
+    if len(sys.argv) < 2 or sys.argv[1] not in ("start", "stop", "run", "notify"):
+        print("Usage: bot.py start|stop|run|notify")
         raise SystemExit(1)
 
     if sys.argv[1] == "start":
@@ -938,3 +945,5 @@ if __name__ == "__main__":
         cli_stop()
     elif sys.argv[1] == "run":
         main()
+    elif sys.argv[1] == "notify":
+        cli_notify()
