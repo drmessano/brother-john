@@ -900,13 +900,40 @@ async def callback_settings_daily_toggle(update: Update, context: ContextTypes.D
     await _edit_settings_message(query, user_id)
 
 
-def _time_hour_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for picking an hour (0-23)."""
-    hours = [str(h) for h in range(24)]
+def _time_mode_keyboard() -> InlineKeyboardMarkup:
+    """First step: choose AM, PM, or 24-hour."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("AM", callback_data="timepick:mode:am"),
+            InlineKeyboardButton("PM", callback_data="timepick:mode:pm"),
+            InlineKeyboardButton("24-Hour", callback_data="timepick:mode:24"),
+        ],
+        [InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel")],
+    ])
+
+
+def _time_hour_keyboard(mode: str) -> InlineKeyboardMarkup:
+    """Hour picker after AM/PM/24 is chosen."""
+    if mode == "am":
+        # 12a, 1a, 2a ... 11a  → 24h values 0,1,...11
+        hours = [(f"{12 if h == 0 else h}a", h) for h in range(12)]
+    elif mode == "pm":
+        # 12p, 1p, 2p ... 11p  → 24h values 12,13,...23
+        hours = [(f"{12 if h == 12 else h - 12}p", h) for h in range(12, 24)]
+    else:
+        # 00, 01 ... 23
+        hours = [(f"{h:02d}", h) for h in range(24)]
+
     rows = []
-    for i in range(0, 24, 6):
-        rows.append([InlineKeyboardButton(f"{h}:__", callback_data=f"timepick:h:{h}") for h in range(i, min(i+6, 24))])
-    rows.append([InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel")])
+    for i in range(0, len(hours), 6):
+        rows.append([
+            InlineKeyboardButton(label, callback_data=f"timepick:h:{val}")
+            for label, val in hours[i:i+6]
+        ])
+    rows.append([
+        InlineKeyboardButton("« Back", callback_data="timepick:back:mode"),
+        InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel"),
+    ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -920,7 +947,7 @@ def _time_minute_keyboard(hour: int) -> InlineKeyboardMarkup:
             for m in minutes[i:i+6]
         ])
     rows.append([
-        InlineKeyboardButton("« Back", callback_data="timepick:back"),
+        InlineKeyboardButton("« Back", callback_data="timepick:back:hour"),
         InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -929,15 +956,26 @@ def _time_minute_keyboard(hour: int) -> InlineKeyboardMarkup:
 async def callback_settings_daily_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("⏰ Choose the hour for your daily study:", reply_markup=_time_hour_keyboard())
+    await query.edit_message_text("⏰ Choose a format for your daily study time:", reply_markup=_time_mode_keyboard())
+
+
+async def callback_timepick_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    mode = query.data.split(":")[2]  # am / pm / 24
+    context.user_data["timepick_mode"] = mode
+    await query.edit_message_text("⏰ Choose the hour:", reply_markup=_time_hour_keyboard(mode))
 
 
 async def callback_timepick_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    _, _, hour_str = query.data.split(":")
-    hour = int(hour_str)
-    await query.edit_message_text(f"⏰ Choose the minute for {hour}:__:", reply_markup=_time_minute_keyboard(hour))
+    hour = int(query.data.split(":")[2])
+    if hour < 12:
+        label = f"{12 if hour == 0 else hour}a"
+    else:
+        label = f"{12 if hour == 12 else hour - 12}p"
+    await query.edit_message_text(f"⏰ Choose the minute for {label}:", reply_markup=_time_minute_keyboard(hour))
 
 
 async def callback_timepick_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -962,7 +1000,13 @@ async def callback_timepick_minute(update: Update, context: ContextTypes.DEFAULT
 async def callback_timepick_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("⏰ Choose the hour for your daily study:", reply_markup=_time_hour_keyboard())
+    destination = query.data.split(":")[2]  # "mode" or "hour"
+    if destination == "hour":
+        mode = context.user_data.get("timepick_mode", "am")
+        await query.edit_message_text("⏰ Choose the hour:", reply_markup=_time_hour_keyboard(mode))
+    else:
+        context.user_data.pop("timepick_mode", None)
+        await query.edit_message_text("⏰ Choose a format for your daily study time:", reply_markup=_time_mode_keyboard())
 
 
 async def callback_timepick_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1242,9 +1286,10 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_settings_timezone, pattern=r"^settings_timezone$"))
     app.add_handler(CallbackQueryHandler(callback_settings_daily_toggle, pattern=r"^settings_daily_toggle$"))
     app.add_handler(CallbackQueryHandler(callback_settings_daily_time, pattern=r"^settings_daily_time$"))
+    app.add_handler(CallbackQueryHandler(callback_timepick_mode,   pattern=r"^timepick:mode:"))
     app.add_handler(CallbackQueryHandler(callback_timepick_hour,   pattern=r"^timepick:h:"))
     app.add_handler(CallbackQueryHandler(callback_timepick_minute, pattern=r"^timepick:m:"))
-    app.add_handler(CallbackQueryHandler(callback_timepick_back,   pattern=r"^timepick:back$"))
+    app.add_handler(CallbackQueryHandler(callback_timepick_back,   pattern=r"^timepick:back:"))
     app.add_handler(CallbackQueryHandler(callback_timepick_cancel, pattern=r"^timepick:cancel$"))
     app.add_handler(CallbackQueryHandler(callback_lk_testament,  pattern=r"^lk:t:"))
     app.add_handler(CallbackQueryHandler(callback_lk_book_group, pattern=r"^lk:bk:"))
