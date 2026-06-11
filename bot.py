@@ -901,11 +901,10 @@ async def callback_settings_daily_toggle(update: Update, context: ContextTypes.D
 
 
 def _time_mode_keyboard() -> InlineKeyboardMarkup:
-    """First step: choose AM, PM, or 24-hour."""
+    """First step: choose AM/PM or 24-hour."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("AM", callback_data="timepick:mode:am"),
-            InlineKeyboardButton("PM", callback_data="timepick:mode:pm"),
+            InlineKeyboardButton("AM/PM", callback_data="timepick:mode:ampm"),
             InlineKeyboardButton("24-Hour", callback_data="timepick:mode:24"),
         ],
         [InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel")],
@@ -913,13 +912,11 @@ def _time_mode_keyboard() -> InlineKeyboardMarkup:
 
 
 def _time_hour_keyboard(mode: str) -> InlineKeyboardMarkup:
-    """Hour picker after AM/PM/24 is chosen."""
-    if mode == "am":
-        # 12a, 1a, 2a ... 11a  → 24h values 0,1,...11
-        hours = [(f"{12 if h == 0 else h}a", h) for h in range(12)]
-    elif mode == "pm":
-        # 12p, 1p, 2p ... 11p  → 24h values 12,13,...23
-        hours = [(f"{12 if h == 12 else h - 12}p", h) for h in range(12, 24)]
+    """Hour picker after mode is chosen."""
+    if mode == "ampm":
+        # 12a, 1a ... 11a, 12p, 1p ... 11p  (all 24 hours in 12h labels)
+        hours = [(f"{12 if h == 0 else h}a", h) for h in range(12)] + \
+                [(f"{12 if h == 12 else h - 12}p", h) for h in range(12, 24)]
     else:
         # 00, 01 ... 23
         hours = [(f"{h:02d}", h) for h in range(24)]
@@ -971,10 +968,7 @@ async def callback_timepick_hour(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
     hour = int(query.data.split(":")[2])
-    if hour < 12:
-        label = f"{12 if hour == 0 else hour}a"
-    else:
-        label = f"{12 if hour == 12 else hour - 12}p"
+    label = f"{12 if hour == 0 else hour}a" if hour < 12 else f"{12 if hour == 12 else hour - 12}p"
     await query.edit_message_text(f"⏰ Choose the minute for {label}:", reply_markup=_time_minute_keyboard(hour))
 
 
