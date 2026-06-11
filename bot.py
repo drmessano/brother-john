@@ -900,22 +900,79 @@ async def callback_settings_daily_toggle(update: Update, context: ContextTypes.D
     await _edit_settings_message(query, user_id)
 
 
+def _time_hour_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for picking an hour (0-23)."""
+    hours = [str(h) for h in range(24)]
+    rows = []
+    for i in range(0, 24, 6):
+        rows.append([InlineKeyboardButton(f"{h}:__", callback_data=f"timepick:h:{h}") for h in range(i, min(i+6, 24))])
+    rows.append([InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _time_minute_keyboard(hour: int) -> InlineKeyboardMarkup:
+    """Inline keyboard for picking minutes in 5-minute steps."""
+    rows = []
+    minutes = list(range(0, 60, 5))
+    for i in range(0, len(minutes), 6):
+        rows.append([
+            InlineKeyboardButton(f"{hour}:{m:02d}", callback_data=f"timepick:m:{hour}:{m}")
+            for m in minutes[i:i+6]
+        ])
+    rows.append([
+        InlineKeyboardButton("« Back", callback_data="timepick:back"),
+        InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
 async def callback_settings_daily_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    await query.edit_message_text("⏰ Choose the hour for your daily study:", reply_markup=_time_hour_keyboard())
+
+
+async def callback_timepick_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, _, hour_str = query.data.split(":")
+    hour = int(hour_str)
+    await query.edit_message_text(f"⏰ Choose the minute for {hour}:__:", reply_markup=_time_minute_keyboard(hour))
+
+
+async def callback_timepick_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":")  # timepick:m:hour:minute
+    hour, minute = int(parts[2]), int(parts[3])
+    daily_time = f"{hour:02d}:{minute:02d}"
+
     user_id = query.from_user.id
-    context.user_data[AWAITING_SCHEDULE_TIME] = {
-        "chat_id": query.message.chat_id,
-        "user_id": user_id,
-    }
+    chat_id = query.message.chat_id
+    tz_name = _get_timezone(user_id)
+    db.upsert_user(user_id, daily_time=daily_time, chat_id=chat_id)
+    _schedule_daily_job(context, user_id, chat_id, daily_time, tz_name)
+
     await query.edit_message_text(
-        "⏰ Send me your daily study time \\(e\\.g\\. `8:00` or `20:30`\\):",
+        f"✅ Daily study set for *{_escape(daily_time)}* \\({_escape(tz_name)}\\) every day\\.",
         parse_mode=ParseMode.MARKDOWN_V2,
     )
 
 
+async def callback_timepick_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("⏰ Choose the hour for your daily study:", reply_markup=_time_hour_keyboard())
+
+
+async def callback_timepick_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await _edit_settings_message(query, query.from_user.id)
+
+
 async def handle_schedule_time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle free-text time input after tapping 'Change Time' in Settings."""
+    """Legacy free-text fallback — no longer the primary path, kept for /schedule command."""
     if AWAITING_SCHEDULE_TIME not in context.user_data:
         return
 
@@ -923,13 +980,19 @@ async def handle_schedule_time_input(update: Update, context: ContextTypes.DEFAU
     tz_name = _get_timezone(user_id)
     text = update.message.text.strip()
 
+    # Any slash command or keyboard button cancels the prompt
+    if text.startswith("/") or text in ("📖 Study", "📅 Daily", "🔍 Lookup", "⚙️ Settings"):
+        del context.user_data[AWAITING_SCHEDULE_TIME]
+        return
+
     try:
         parts = text.replace(".", ":").split(":")
         hour, minute = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             raise ValueError
     except (ValueError, IndexError):
-        await update.message.reply_text("⚠️ Invalid time. Try something like: 8:00 or 20:30")
+        del context.user_data[AWAITING_SCHEDULE_TIME]
+        await update.message.reply_text("⚠️ Invalid time. Use the Settings menu to set your schedule.")
         return
 
     daily_time = f"{hour:02d}:{minute:02d}"
@@ -1016,10 +1079,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # If we're waiting for schedule time input, handle it first
-    if AWAITING_SCHEDULE_TIME in context.user_data:
-        await handle_schedule_time_input(update, context)
-        return
+    # Cancel any pending state when the user taps a main keyboard button
+    context.user_data.pop(AWAITING_SCHEDULE_TIME, None)
 
     text = update.message.text
     if text == "📖 Study":
@@ -1181,6 +1242,10 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_settings_timezone, pattern=r"^settings_timezone$"))
     app.add_handler(CallbackQueryHandler(callback_settings_daily_toggle, pattern=r"^settings_daily_toggle$"))
     app.add_handler(CallbackQueryHandler(callback_settings_daily_time, pattern=r"^settings_daily_time$"))
+    app.add_handler(CallbackQueryHandler(callback_timepick_hour,   pattern=r"^timepick:h:"))
+    app.add_handler(CallbackQueryHandler(callback_timepick_minute, pattern=r"^timepick:m:"))
+    app.add_handler(CallbackQueryHandler(callback_timepick_back,   pattern=r"^timepick:back$"))
+    app.add_handler(CallbackQueryHandler(callback_timepick_cancel, pattern=r"^timepick:cancel$"))
     app.add_handler(CallbackQueryHandler(callback_lk_testament,  pattern=r"^lk:t:"))
     app.add_handler(CallbackQueryHandler(callback_lk_book_group, pattern=r"^lk:bk:"))
     app.add_handler(CallbackQueryHandler(callback_lk_chapter,    pattern=r"^lk:ch:"))
