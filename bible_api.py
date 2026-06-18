@@ -274,6 +274,8 @@ def _strip_html(html: str) -> str:
     html = re.sub(r'<p[^>]+class="[sdm][^"]*"[^>]*>.*?</p>', "", html, flags=re.DOTALL)
     # Remove verse number spans
     html = re.sub(r'<span[^>]+data-number="[^"]*"[^>]*>\d+</span>', "", html)
+    # Replace block-level tags with a space so adjacent words don't run together
+    html = re.sub(r"</?(p|div|br|li|tr|td|th)[^>]*>", " ", html, flags=re.IGNORECASE)
     # Remove all remaining tags
     text = re.sub(r"<[^>]+>", "", html)
     # Collapse whitespace
