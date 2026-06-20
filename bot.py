@@ -225,7 +225,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /help — Show this message\n\n"
         f"Translation: *{_escape(translation)}* \\| Timezone: *{_escape(tz)}*"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
+    await context.bot.send_message(update.effective_chat.id, text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
 
 
 async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
