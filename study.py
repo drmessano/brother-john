@@ -55,10 +55,12 @@ def generate_study_prompt(passage_text: str, reference: str, translation: str) -
     return _with_retry(_call)
 
 
-def generate_daily_passage_and_study(translation: str = "KJV", user_id: int = 0) -> str:
+def generate_daily_passage_and_study(translation: str = "KJV", user_id: int = 0, deterministic: bool = True) -> str:
     """
     Ask Claude to choose a passage for today's study.
     Returns the reference string.
+    deterministic=True (default): same book per user per day, used for /daily pre-cache.
+    deterministic=False: random book each call, used for /study.
     """
     import random
     from datetime import date
@@ -71,7 +73,7 @@ def generate_daily_passage_and_study(translation: str = "KJV", user_id: int = 0)
         "2 Corinthians", "Galatians", "Ephesians", "Philippians", "Colossians",
         "1 Thessalonians", "Hebrews", "James", "1 Peter", "1 John", "Revelation",
     ]
-    rng = random.Random(f"{user_id}-{today}")
+    rng = random.Random(f"{user_id}-{today}") if deterministic else random.Random()
     suggested_book = rng.choice(books)
 
     system = (

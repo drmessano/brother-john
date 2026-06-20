@@ -241,10 +241,10 @@ async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
     translation = _get_translation(user_id)
     chat_id = update.effective_chat.id
 
-    status = await update.message.reply_text("📖 Preparing your study...")
+    status = await context.bot.send_message(chat_id, "📖 Preparing your study...")
     loop = asyncio.get_event_loop()
     try:
-        reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id))
+        reference = await loop.run_in_executor(None, lambda: generate_daily_passage_and_study(translation, user_id, deterministic=False))
     except Exception as e:
         await context.bot.edit_message_text(f"⚠️ Couldn't choose a passage: {e}", chat_id=chat_id, message_id=status.message_id)
         return
@@ -259,7 +259,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     translation = _get_translation(user_id)
     chat_id = update.effective_chat.id
 
-    status = await update.message.reply_text("📅 Retrieving today's daily study...")
+    status = await context.bot.send_message(chat_id, "📅 Retrieving today's daily study...")
 
     cached = db.get_cached_study(translation)
     if cached:
@@ -295,7 +295,8 @@ async def cmd_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     if not context.args:
-        await update.message.reply_text(
+        await context.bot.send_message(
+            chat_id,
             "📖 Choose a passage:",
             reply_markup=_lk_testament_keyboard(),
         )
@@ -803,8 +804,10 @@ async def callback_tz_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     db.upsert_user(user_id)
-    await _show_settings(update.message.reply_text, user_id)
+    send_fn = lambda text, **kw: context.bot.send_message(chat_id, text, **kw)
+    await _show_settings(send_fn, user_id)
 
 
 async def _show_settings(reply_fn, user_id: int):
@@ -1126,7 +1129,7 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
     elif text == "📅 Daily":
         await cmd_daily(update, context)
     elif text == "🔍 Lookup":
-        await update.message.reply_text("📖 Choose a passage:", reply_markup=_lk_testament_keyboard())
+        await context.bot.send_message(update.effective_chat.id, "📖 Choose a passage:", reply_markup=_lk_testament_keyboard())
     elif text == "⚙️ Settings":
         await cmd_settings(update, context)
 
