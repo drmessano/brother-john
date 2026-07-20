@@ -6,8 +6,10 @@ from tinydb import TinyDB, Query
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "brother-john.json")
-RATE_LIMIT = 20          # max study/verse requests
+RATE_LIMIT = 20          # max study generations
 RATE_WINDOW = 3600       # per hour (seconds)
+LOOKUP_RATE_LIMIT = 60   # max passage lookups (cheaper — no Claude call)
+LOOKUP_RATE_WINDOW = 3600
 
 _db: TinyDB | None = None
 
@@ -88,24 +90,30 @@ def get_active_translations() -> list[str]:
 # Rate limiting
 # ---------------------------------------------------------------------------
 
-def check_rate_limit(user_id: int) -> tuple[bool, int]:
-    """Check if user is within rate limit.
+def check_rate_limit(
+    user_id: int,
+    limit: int = RATE_LIMIT,
+    window: int = RATE_WINDOW,
+    field: str = "requests",
+) -> tuple[bool, int]:
+    """Check if user is within the given rate limit bucket.
     Returns (allowed: bool, remaining: int).
+    Separate buckets (e.g. study vs lookup) are tracked via distinct `field`s.
     """
     upsert_user(user_id)
     user = get_user(user_id)
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(seconds=RATE_WINDOW)).isoformat()
+    cutoff = (now - timedelta(seconds=window)).isoformat()
 
-    recent = [r for r in user.get("requests", []) if r >= cutoff]
-    remaining = max(0, RATE_LIMIT - len(recent))
-    allowed = len(recent) < RATE_LIMIT
+    recent = [r for r in user.get(field, []) if r >= cutoff]
+    remaining = max(0, limit - len(recent))
+    allowed = len(recent) < limit
 
     if allowed:
         recent.append(now.isoformat())
 
     User = Query()
-    _users(_get_db()).update({"requests": recent}, User.user_id == user_id)
+    _users(_get_db()).update({field: recent}, User.user_id == user_id)
 
     return allowed, remaining
 

@@ -12,6 +12,18 @@ _bible_cache: dict | None = None
 # Verse text cache: (reference_lower, translation_upper) -> {result, expires_at}
 _verse_cache: dict[tuple, dict] = {}
 VERSE_CACHE_TTL = 6 * 3600  # 6 hours
+VERSE_CACHE_MAX = 512       # cap entries so arbitrary lookups can't exhaust memory
+
+
+def _verse_cache_set(key: tuple, result: dict, now: float):
+    """Store a verse result, evicting expired then oldest entries to stay bounded."""
+    if len(_verse_cache) >= VERSE_CACHE_MAX and key not in _verse_cache:
+        for k in [k for k, v in _verse_cache.items() if v["expires_at"] <= now]:
+            del _verse_cache[k]
+        # If still at capacity, drop oldest insertion-order entries (FIFO).
+        while len(_verse_cache) >= VERSE_CACHE_MAX:
+            del _verse_cache[next(iter(_verse_cache))]
+    _verse_cache[key] = {"result": result, "expires_at": now + VERSE_CACHE_TTL}
 
 # Ordered book lists for the picker: (usfm, display_name)
 OT_BOOKS = [
@@ -198,7 +210,7 @@ async def fetch_passage(reference: str, translation: str = "KJV") -> dict:
     else:
         result = await _fetch_fallback(reference, translation)
 
-    _verse_cache[key] = {"result": result, "expires_at": now + VERSE_CACHE_TTL}
+    _verse_cache_set(key, result, now)
     return result
 
 
