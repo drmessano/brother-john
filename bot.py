@@ -60,10 +60,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-# Context key used when waiting for a schedule time from the user
-AWAITING_SCHEDULE_TIME = "awaiting_schedule_time"
-
-
 # ---------------------------------------------------------------------------
 # Timezone helpers
 # ---------------------------------------------------------------------------
@@ -271,20 +267,53 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if sent:
             return
 
-    # No cache — generate transparently, reusing the same status message
+    # No cache — generating is as expensive as /study, so gate it on the same
+    # rate limit, then warm the cache so later users hit the cheap path.
+    allowed, _ = db.check_rate_limit(user_id)
+    if not allowed:
+        try:
+            await context.bot.edit_message_text(
+                "⏱ You've reached the limit of 20 studies per hour. Please try again later.",
+                chat_id=chat_id, message_id=status.message_id,
+            )
+        except Exception:
+            pass
+        return
+
+    async def _edit_err(text: str):
+        try:
+            await context.bot.edit_message_text(text, chat_id=chat_id, message_id=status.message_id)
+        except Exception:
+            pass
+
     loop = asyncio.get_event_loop()
     try:
         reference = await loop.run_in_executor(
             None, lambda: generate_daily_passage_and_study(translation, user_id=0)
         )
     except Exception as e:
-        try:
-            await context.bot.edit_message_text(f"⚠️ Couldn't retrieve today's study: {e}", chat_id=chat_id, message_id=status.message_id)
-        except Exception:
-            pass
+        await _edit_err(f"⚠️ Couldn't retrieve today's study: {e}")
         return
 
-    await _send_study(context, chat_id, reference, translation, status_message=status)
+    try:
+        passage = await fetch_passage(reference, translation)
+        study_text = await loop.run_in_executor(
+            None,
+            generate_study_from_reference,
+            passage["reference"],
+            passage["text"],
+            passage["translation"],
+        )
+    except Exception as e:
+        await _edit_err(f"⚠️ Couldn't retrieve today's study: {e}")
+        return
+
+    db.set_cached_study(translation, passage["reference"], study_text)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
+    except Exception:
+        pass
+    await _deliver_study(context.bot, chat_id, passage, study_text)
 
 
 async def cmd_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -300,6 +329,13 @@ async def cmd_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📖 Choose a passage:",
             reply_markup=_lk_testament_keyboard(),
         )
+        return
+
+    allowed, _ = db.check_rate_limit(
+        user_id, limit=db.LOOKUP_RATE_LIMIT, window=db.LOOKUP_RATE_WINDOW, field="lookup_requests"
+    )
+    if not allowed:
+        await update.message.reply_text("⏱ You've reached the lookup limit. Please try again later.")
         return
 
     reference = " ".join(context.args)
@@ -461,8 +497,12 @@ async def callback_lk_testament(update: Update, context: ContextTypes.DEFAULT_TY
 async def callback_lk_book_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    _, _, t, s, e = query.data.split(":")
-    s, e = int(s), int(e)
+    try:
+        _, _, t, s, e = query.data.split(":")
+        s, e = int(s), int(e)
+    except (ValueError, IndexError):
+        await query.answer("Invalid selection.", show_alert=True)
+        return
     books = OT_BOOKS if t == "O" else NT_BOOKS
     label = "Old Testament" if t == "O" else "New Testament"
     await query.edit_message_text(
@@ -476,7 +516,11 @@ async def callback_lk_chapter(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     parts = query.data.split(":")
-    usfm, s, e = parts[2], int(parts[3]), int(parts[4])
+    try:
+        usfm, s, e = parts[2], int(parts[3]), int(parts[4])
+    except (ValueError, IndexError):
+        await query.answer("Invalid selection.", show_alert=True)
+        return
 
     api_key = os.getenv("BIBLE_API_KEY", "")
     bible_id = await find_bible_id(_get_translation(query.from_user.id))
@@ -505,7 +549,11 @@ async def callback_lk_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     parts = query.data.split(":")
-    usfm, chapter_id, s, e = parts[2], parts[3], int(parts[4]), int(parts[5])
+    try:
+        usfm, chapter_id, s, e = parts[2], parts[3], int(parts[4]), int(parts[5])
+    except (ValueError, IndexError):
+        await query.answer("Invalid selection.", show_alert=True)
+        return
 
     api_key = os.getenv("BIBLE_API_KEY", "")
     bible_id = await find_bible_id(_get_translation(query.from_user.id))
@@ -533,6 +581,12 @@ async def callback_lk_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_lk_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """lk:v:{verse_id}  e.g. lk:v:JHN.3.16"""
     query = update.callback_query
+    allowed, _ = db.check_rate_limit(
+        query.from_user.id, limit=db.LOOKUP_RATE_LIMIT, window=db.LOOKUP_RATE_WINDOW, field="lookup_requests"
+    )
+    if not allowed:
+        await query.answer("You've reached the lookup limit. Please try again later.", show_alert=True)
+        return
     await query.answer()
     verse_id = query.data[5:]  # strip "lk:v:"
 
@@ -631,7 +685,21 @@ async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_set_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    translation = query.data.split(":")[1]
+    translation = query.data.split(":", 1)[1]
+
+    # Callback data is client-supplied and can be forged — only accept a
+    # translation that actually exists in the api.bible catalogue (KJV always
+    # works via the no-key fallback).
+    try:
+        bibles = await get_available_bibles()
+    except Exception:
+        bibles = []
+    valid = {b.get("abbreviation", b["id"]) for b in bibles}
+    valid.add("KJV")
+    if translation not in valid:
+        await query.answer("Unknown translation.", show_alert=True)
+        return
+
     db.upsert_user(query.from_user.id, translation=translation)
     await query.edit_message_text(f"✅ Translation set to *{_escape(_clean_translation_label(translation))}*", parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -970,7 +1038,11 @@ async def callback_timepick_mode(update: Update, context: ContextTypes.DEFAULT_T
 async def callback_timepick_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    hour = int(query.data.split(":")[2])
+    try:
+        hour = int(query.data.split(":")[2])
+    except (ValueError, IndexError):
+        await query.answer("Invalid selection.", show_alert=True)
+        return
     label = f"{12 if hour == 0 else hour}a" if hour < 12 else f"{12 if hour == 12 else hour - 12}p"
     await query.edit_message_text(f"⏰ Choose the minute for {label}:", reply_markup=_time_minute_keyboard(hour))
 
@@ -979,7 +1051,13 @@ async def callback_timepick_minute(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     parts = query.data.split(":")  # timepick:m:hour:minute
-    hour, minute = int(parts[2]), int(parts[3])
+    try:
+        hour, minute = int(parts[2]), int(parts[3])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+    except (ValueError, IndexError):
+        await query.answer("Invalid selection.", show_alert=True)
+        return
     daily_time = f"{hour:02d}:{minute:02d}"
 
     user_id = query.from_user.id
@@ -1010,42 +1088,6 @@ async def callback_timepick_cancel(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     await _edit_settings_message(query, query.from_user.id)
-
-
-async def handle_schedule_time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Legacy free-text fallback — no longer the primary path, kept for /schedule command."""
-    if AWAITING_SCHEDULE_TIME not in context.user_data:
-        return
-
-    user_id = update.effective_user.id
-    tz_name = _get_timezone(user_id)
-    text = update.message.text.strip()
-
-    # Any slash command or keyboard button cancels the prompt
-    if text.startswith("/") or text in ("📖 Study", "📅 Daily", "🔍 Lookup", "⚙️ Settings"):
-        del context.user_data[AWAITING_SCHEDULE_TIME]
-        return
-
-    try:
-        parts = text.replace(".", ":").split(":")
-        hour, minute = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            raise ValueError
-    except (ValueError, IndexError):
-        del context.user_data[AWAITING_SCHEDULE_TIME]
-        await update.message.reply_text("⚠️ Invalid time. Use the Settings menu to set your schedule.")
-        return
-
-    daily_time = f"{hour:02d}:{minute:02d}"
-    chat_id = update.effective_chat.id
-    db.upsert_user(user_id, daily_time=daily_time, chat_id=chat_id)
-    _schedule_daily_job(context, user_id, chat_id, daily_time, tz_name)
-    del context.user_data[AWAITING_SCHEDULE_TIME]
-
-    await update.message.reply_text(
-        f"✅ Daily study set for *{_escape(daily_time)}* \\({_escape(tz_name)}\\) every day\\.",
-        parse_mode=ParseMode.MARKDOWN_V2,
-    )
 
 
 async def _edit_settings_message(query, user_id: int):
@@ -1119,10 +1161,20 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
 
-async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Cancel any pending state when the user taps a main keyboard button
-    context.user_data.pop(AWAITING_SCHEDULE_TIME, None)
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Global handler: log any unhandled exception and fail gracefully to the user."""
+    logger.error("Unhandled exception while handling update", exc_info=context.error)
+    try:
+        if isinstance(update, Update):
+            if update.callback_query:
+                await update.callback_query.answer("Something went wrong. Please try again.", show_alert=False)
+            elif update.effective_chat:
+                await context.bot.send_message(update.effective_chat.id, "⚠️ Something went wrong. Please try again.")
+    except Exception:
+        pass
 
+
+async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == "📖 Study":
         await cmd_study(update, context)
@@ -1299,11 +1351,8 @@ def main():
         filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings)$"),
         handle_keyboard_button,
     ))
-    # Catch-all for awaiting schedule time input
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_schedule_time_input,
-    ))
+
+    app.add_error_handler(on_error)
 
     logger.info("Brother John starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
