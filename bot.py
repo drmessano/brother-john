@@ -60,6 +60,9 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+VERSE_BACKGROUND_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vbackground.png")
+_verse_background_file_id: str | None = None
+
 # ---------------------------------------------------------------------------
 # Timezone helpers
 # ---------------------------------------------------------------------------
@@ -159,6 +162,29 @@ async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, referenc
     await _deliver_study(context.bot, chat_id, passage, study_text)
 
 
+async def _send_verse_photo(bot, chat_id: int, passage: dict, reply_markup=None):
+    """Send the verse as its own message with a background image. Caption text stays selectable/copyable."""
+    global _verse_background_file_id
+
+    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
+    verse_text = f"_{_escape(passage['text'])}_"
+    caption = header + verse_text
+
+    photo = _verse_background_file_id or open(VERSE_BACKGROUND_PATH, "rb")
+    try:
+        if len(caption) <= 1024:
+            msg = await bot.send_photo(chat_id, photo, caption=caption, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
+        else:
+            msg = await bot.send_photo(chat_id, photo)
+            await bot.send_message(chat_id, header + verse_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
+    finally:
+        if hasattr(photo, "close"):
+            photo.close()
+
+    if _verse_background_file_id is None:
+        _verse_background_file_id = msg.photo[-1].file_id
+
+
 async def _send_cached_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cached: dict) -> bool:
     """Send a pre-cached study. Returns True on success."""
     try:
@@ -166,35 +192,29 @@ async def _send_cached_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, c
     except Exception:
         return False
 
+    await _send_verse_photo(context.bot, chat_id, passage)
+
     study_text = cached["study_text"]
-    translation = cached["translation"]
-
-    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(translation))}\\)\n\n"
-    verse_block = f"_{_escape(passage['text'])}_\n\n"
     divider = "—" * 20 + "\n\n"
-    body = _escape(study_text)
-    full_message = header + verse_block + _escape(divider) + body
+    study_message = _escape(divider) + _escape(study_text)
 
-    if len(full_message) <= 4096:
-        await context.bot.send_message(chat_id, full_message, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
+    if len(study_message) <= 4096:
+        await context.bot.send_message(chat_id, study_message, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
     else:
-        await context.bot.send_message(chat_id, header + verse_block, parse_mode=ParseMode.MARKDOWN_V2)
         await context.bot.send_message(chat_id, study_text, reply_markup=MAIN_KEYBOARD)
     return True
 
 
 async def _deliver_study(bot, chat_id: int, passage: dict, study_text: str):
-    """Format and send a study passage."""
-    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
-    verse_block = f"_{_escape(passage['text'])}_\n\n"
-    divider = "—" * 20 + "\n\n"
-    body = _escape(study_text)
-    full_message = header + verse_block + _escape(divider) + body
+    """Send the verse (with background image) then the study."""
+    await _send_verse_photo(bot, chat_id, passage)
 
-    if len(full_message) <= 4096:
-        await bot.send_message(chat_id, full_message, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
+    divider = "—" * 20 + "\n\n"
+    study_message = _escape(divider) + _escape(study_text)
+
+    if len(study_message) <= 4096:
+        await bot.send_message(chat_id, study_message, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
     else:
-        await bot.send_message(chat_id, header + verse_block, parse_mode=ParseMode.MARKDOWN_V2)
         await bot.send_message(chat_id, study_text, reply_markup=MAIN_KEYBOARD)
 
 
@@ -358,9 +378,7 @@ async def _do_lookup(bot, chat_id: int, reference: str, translation: str, reply_
         await bot.delete_message(chat_id=chat_id, message_id=status.message_id)
     except Exception:
         pass
-    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
-    text = f"{header}{_escape(passage['text'])}"
-    await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
+    await _send_verse_photo(bot, chat_id, passage, reply_markup=MAIN_KEYBOARD)
 
 
 # ---------------------------------------------------------------------------
