@@ -23,6 +23,8 @@ from telegram.ext import (
 )
 
 import math
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 import db
 from bible_api import (
     fetch_passage, get_available_bibles, _clean_translation_label,
@@ -61,7 +63,108 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 VERSE_BACKGROUND_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vbackground.png")
-_verse_background_file_id: str | None = None
+
+_BODY_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+    "/System/Library/Fonts/Supplemental/Georgia.ttf",
+    "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+]
+_LABEL_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+]
+_font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
+
+
+def _load_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
+    key = (candidates[0], size)
+    if key in _font_cache:
+        return _font_cache[key]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                font = ImageFont.truetype(path, size)
+                _font_cache[key] = font
+                return font
+            except Exception:
+                continue
+    font = ImageFont.load_default()
+    _font_cache[key] = font
+    return font
+
+
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        trial = f"{current} {word}".strip()
+        if draw.textlength(trial, font=font) <= max_width:
+            current = trial
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _render_verse_image(reference: str, translation: str, verse_text: str) -> BytesIO:
+    """Bake the verse text onto the background image. Returns JPEG bytes."""
+    base = Image.open(VERSE_BACKGROUND_PATH).convert("RGBA")
+    width, height = base.size
+
+    margin_x = int(width * 0.10)
+    margin_y = int(height * 0.12)
+    box = [margin_x - 24, margin_y - 24, width - margin_x + 24, height - margin_y + 24]
+
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    ImageDraw.Draw(overlay).rectangle(box, fill=(0, 0, 0, 140))
+    img = Image.alpha_composite(base, overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    max_text_width = width - 2 * margin_x
+    max_text_height = height - 2 * margin_y
+
+    header_text = _clean_translation_label(translation).upper()
+    footer_text = reference
+
+    body_font = label_font = lines = line_height = label_height = None
+    for body_size in range(66, 21, -4):
+        candidate_body_font = _load_font(_BODY_FONT_CANDIDATES, body_size)
+        candidate_label_font = _load_font(_LABEL_FONT_CANDIDATES, max(int(body_size * 0.55), 18))
+        candidate_lines = _wrap_text(draw, verse_text, candidate_body_font, max_text_width)
+        candidate_line_height = int(body_size * 1.35)
+        candidate_label_height = int(candidate_label_font.size * 1.6)
+        total_height = candidate_label_height + len(candidate_lines) * candidate_line_height + candidate_label_height + 30
+        if total_height <= max_text_height or body_size <= 25:
+            body_font, label_font, lines = candidate_body_font, candidate_label_font, candidate_lines
+            line_height, label_height = candidate_line_height, candidate_label_height
+            break
+
+    center_x = width // 2
+    total_content_height = label_height + len(lines) * line_height + label_height + 30
+    y = margin_y + max(0, (max_text_height - total_content_height) // 2)
+
+    draw.text((center_x, y), header_text, font=label_font, fill=(230, 220, 190), anchor="ma")
+    y += label_height + 10
+
+    for line in lines:
+        draw.text((center_x, y), line, font=body_font, fill="white", anchor="ma")
+        y += line_height
+
+    y += 20
+    draw.text((center_x, y), footer_text, font=label_font, fill=(230, 220, 190), anchor="ma")
+
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    buf.seek(0)
+    buf.name = "verse.jpg"
+    return buf
 
 # ---------------------------------------------------------------------------
 # Timezone helpers
@@ -163,26 +266,22 @@ async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, referenc
 
 
 async def _send_verse_photo(bot, chat_id: int, passage: dict, reply_markup=None):
-    """Send the verse as its own message with a background image. Caption text stays selectable/copyable."""
-    global _verse_background_file_id
-
+    """Send the verse baked into the background image as its own message.
+    A plain-text caption is also included so the verse stays copy/paste-able."""
     header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
     verse_text = f"_{_escape(passage['text'])}_"
     caption = header + verse_text
 
-    photo = _verse_background_file_id or open(VERSE_BACKGROUND_PATH, "rb")
-    try:
-        if len(caption) <= 1024:
-            msg = await bot.send_photo(chat_id, photo, caption=caption, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
-        else:
-            msg = await bot.send_photo(chat_id, photo)
-            await bot.send_message(chat_id, header + verse_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
-    finally:
-        if hasattr(photo, "close"):
-            photo.close()
+    loop = asyncio.get_event_loop()
+    image_buf = await loop.run_in_executor(
+        None, _render_verse_image, passage["reference"], passage["translation"], passage["text"]
+    )
 
-    if _verse_background_file_id is None:
-        _verse_background_file_id = msg.photo[-1].file_id
+    if len(caption) <= 1024:
+        await bot.send_photo(chat_id, image_buf, caption=caption, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
+    else:
+        await bot.send_photo(chat_id, image_buf)
+        await bot.send_message(chat_id, header + verse_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
 
 
 async def _send_cached_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cached: dict) -> bool:
