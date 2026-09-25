@@ -119,7 +119,7 @@ def _render_verse_image(reference: str, translation: str, verse_text: str) -> By
     width, height = base.size
 
     margin_x = int(width * 0.10)
-    margin_y = int(height * 0.12)
+    margin_y = int(height * 0.06)
     box = [margin_x - 24, margin_y - 24, width - margin_x + 24, height - margin_y + 24]
 
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
@@ -133,7 +133,7 @@ def _render_verse_image(reference: str, translation: str, verse_text: str) -> By
     header_text = _clean_translation_label(translation).upper()
     footer_text = reference
 
-    max_body_size = max(int(min(width, height) * 0.075), 40)
+    max_body_size = max(int(min(width, height) * 0.09), 44)
 
     body_font = label_font = lines = line_height = label_height = None
     for body_size in range(max_body_size, 21, -4):
