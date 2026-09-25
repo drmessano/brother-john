@@ -133,8 +133,10 @@ def _render_verse_image(reference: str, translation: str, verse_text: str) -> By
     header_text = _clean_translation_label(translation).upper()
     footer_text = reference
 
+    max_body_size = max(int(min(width, height) * 0.075), 40)
+
     body_font = label_font = lines = line_height = label_height = None
-    for body_size in range(66, 21, -4):
+    for body_size in range(max_body_size, 21, -4):
         candidate_body_font = _load_font(_BODY_FONT_CANDIDATES, body_size)
         candidate_label_font = _load_font(_LABEL_FONT_CANDIDATES, max(int(body_size * 0.55), 18))
         candidate_lines = _wrap_text(draw, verse_text, candidate_body_font, max_text_width)
