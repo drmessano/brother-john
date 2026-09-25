@@ -266,22 +266,27 @@ async def _send_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, referenc
 
 
 async def _send_verse_photo(bot, chat_id: int, passage: dict, reply_markup=None):
-    """Send the verse baked into the background image as its own message.
-    A plain-text caption is also included so the verse stays copy/paste-able."""
+    """Send the verse image with the verse text as its caption — always one message.
+    The caption stays copy/paste-able. Telegram hard-caps captions at 1024 chars,
+    so on the rare oversized passage the verse text (not the reference) is trimmed
+    to fit, rather than splitting into a second message."""
     header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
-    verse_text = f"_{_escape(passage['text'])}_"
-    caption = header + verse_text
+    raw_text = passage["text"]
 
     loop = asyncio.get_event_loop()
     image_buf = await loop.run_in_executor(
-        None, _render_verse_image, passage["reference"], passage["translation"], passage["text"]
+        None, _render_verse_image, passage["reference"], passage["translation"], raw_text
     )
 
-    if len(caption) <= 1024:
-        await bot.send_photo(chat_id, image_buf, caption=caption, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
-    else:
-        await bot.send_photo(chat_id, image_buf)
-        await bot.send_message(chat_id, header + verse_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
+    verse_text = f"_{_escape(raw_text)}_"
+    caption = header + verse_text
+    if len(caption) > 1024:
+        budget = 1024 - len(header) - len("_…_")
+        trimmed = raw_text[:budget].rsplit(" ", 1)[0]
+        verse_text = f"_{_escape(trimmed)}…_"
+        caption = header + verse_text
+
+    await bot.send_photo(chat_id, image_buf, caption=caption, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
 
 
 async def _send_cached_study(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cached: dict) -> bool:
