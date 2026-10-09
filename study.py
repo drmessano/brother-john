@@ -7,9 +7,17 @@ import anthropic
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+MODEL = "claude-haiku-5-5"
+# Haiku 5.5 thinks by default; these are simple tasks, so turn it off
+NO_THINKING = {"thinking": {"type": "disabled"}}
+
 CLAUDE_TIMEOUT = 30.0   # seconds per API call
 RETRY_ATTEMPTS = 2
 RETRY_DELAY = 3         # seconds between retries
+
+
+def _text(message) -> str:
+    return next(b.text for b in message.content if b.type == "text")
 
 
 def _with_retry(fn):
@@ -44,13 +52,14 @@ def generate_study_prompt(passage_text: str, reference: str, translation: str) -
 
     def _call():
         message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=MODEL,
+            extra_body=NO_THINKING,
             max_tokens=1024,
             timeout=CLAUDE_TIMEOUT,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-        return message.content[0].text
+        return _text(message)
 
     return _with_retry(_call)
 
@@ -85,13 +94,14 @@ def generate_daily_passage_and_study(translation: str = "KJV", user_id: int = 0,
 
     def _call():
         selection = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=MODEL,
+            extra_body=NO_THINKING,
             max_tokens=50,
             timeout=CLAUDE_TIMEOUT,
             system=system,
             messages=[{"role": "user", "content": f"Choose a study passage from the book of {suggested_book} for {today}."}],
         )
-        return selection.content[0].text.strip()
+        return _text(selection).strip()
 
     return _with_retry(_call)
 
