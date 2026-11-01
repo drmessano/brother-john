@@ -270,7 +270,7 @@ async def _fetch_fallback(reference: str, translation: str) -> dict:
     if not data or not isinstance(data, list):
         raise ValueError(f"No results for '{reference}'")
 
-    verses = [v.get("text", "").strip() for v in data]
+    verses = [f"{_superscript(str(v.get('verse', '')))}{v.get('text', '').strip()}" for v in data]
     first, last = data[0], data[-1]
     book = first.get("bookname", "")
     ch = first.get("chapter", "")
@@ -281,11 +281,22 @@ async def _fetch_fallback(reference: str, translation: str) -> dict:
     return {"text": " ".join(verses), "reference": ref, "translation": "KJV (fallback)"}
 
 
+_SUPERSCRIPTS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def _superscript(number: str) -> str:
+    return number.replace("-", "–").translate(_SUPERSCRIPTS)
+
+
 def _strip_html(html: str) -> str:
     # Remove section headings: <p class="s1">, <p class="s2">, <p class="d">, etc.
     html = re.sub(r'<p[^>]+class="[sdm][^"]*"[^>]*>.*?</p>', "", html, flags=re.DOTALL)
-    # Remove verse number spans
-    html = re.sub(r'<span[^>]+data-number="[^"]*"[^>]*>\d+</span>', "", html)
+    # Keep verse numbers inline as superscripts, like a printed Bible
+    html = re.sub(
+        r'<span[^>]+data-number="[^"]*"[^>]*>([\d\-,]+)</span>\s*',
+        lambda m: f" {_superscript(m.group(1))}",
+        html,
+    )
     # Replace block-level tags with a space so adjacent words don't run together
     html = re.sub(r"</?(p|div|br|li|tr|td|th)[^>]*>", " ", html, flags=re.IGNORECASE)
     # Remove all remaining tags
