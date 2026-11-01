@@ -676,7 +676,7 @@ async def callback_lk_chapter(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-LK_VERSE_PROMPT = "choose a verse or verses (tap one, then another for a range):"
+LK_VERSE_PROMPT = "choose a verse or verse range:"
 
 
 async def _lk_show_verses(query, usfm: str, chapter_id: str, s: int, e: int, sel):
