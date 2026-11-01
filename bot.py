@@ -1404,17 +1404,24 @@ async def _daily_job(context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------------------
 
 DONATION_AMOUNTS = [25, 50, 100, 250, 500]
+STAR_USD = 0.02   # approximate retail price of one Star
+
+
+def _donation_label(n: int) -> str:
+    usd = n * STAR_USD
+    return f"⭐ {n} (~${usd:.2f})" if usd < 1 else f"⭐ {n} (~${usd:g})"
 
 
 async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = [[InlineKeyboardButton(f"⭐ {n}", callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[:3]],
-            [InlineKeyboardButton(f"⭐ {n}", callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[3:]],
+    rows = [[InlineKeyboardButton(_donation_label(n), callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[:3]],
+            [InlineKeyboardButton(_donation_label(n), callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[3:]],
             _cancel_row()]
     await context.bot.send_message(
         update.effective_chat.id,
         "💝 *Support Brother John*\n\n"
-        "Brother John is free to use\. If it blesses you, you can help cover "
-        "the costs of running it with a gift of Telegram Stars\. Choose an amount:",
+        "Brother John is free to use\\. If it blesses you, you can help cover "
+        "the costs of running it with a gift of Telegram Stars \\(about 2¢ each\\)\\. "
+        "You can pay with Apple Pay, Google Pay or a card right inside Telegram\\. Choose an amount:",
         parse_mode=ParseMode.MARKDOWN_V2,
         reply_markup=InlineKeyboardMarkup(rows),
     )
