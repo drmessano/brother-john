@@ -357,7 +357,7 @@ async def cmd_study(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     allowed, _ = db.check_rate_limit(user_id)
     if not allowed:
-        await update.message.reply_text("⏱ You've reached the limit of 20 studies per hour. Please try again later.")
+        await context.bot.send_message(update.effective_chat.id, "⏱ You've reached the limit of 20 studies per hour. Please try again later.")
         return
 
     translation = _get_translation(user_id)
@@ -461,17 +461,16 @@ async def cmd_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id, limit=db.LOOKUP_RATE_LIMIT, window=db.LOOKUP_RATE_WINDOW, field="lookup_requests"
     )
     if not allowed:
-        await update.message.reply_text("⏱ You've reached the lookup limit. Please try again later.")
+        await context.bot.send_message(update.effective_chat.id, "⏱ You've reached the lookup limit. Please try again later.")
         return
 
     reference = " ".join(context.args)
-    await _do_lookup(context.bot, chat_id, reference, translation, reply_to=update.message)
+    await _do_lookup(context.bot, chat_id, reference, translation)
 
 
-async def _do_lookup(bot, chat_id: int, reference: str, translation: str, reply_to=None):
+async def _do_lookup(bot, chat_id: int, reference: str, translation: str):
     """Fetch and display a passage (text only, no study)."""
-    send = reply_to.reply_text if reply_to else lambda t, **kw: bot.send_message(chat_id, t, **kw)
-    status = await send(f"🔍 Looking up {reference}...")
+    status = await bot.send_message(chat_id, f"🔍 Looking up {reference}...")
     try:
         passage = await fetch_passage(reference, translation)
     except Exception as e:
@@ -853,15 +852,15 @@ async def callback_lk_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Fetching available translations...")
+    await context.bot.send_message(update.effective_chat.id, "🔍 Fetching available translations...")
     try:
         bibles = await get_available_bibles()
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Couldn't fetch translations: {e}")
+        await context.bot.send_message(update.effective_chat.id, f"⚠️ Couldn't fetch translations: {e}")
         return
 
     if not bibles:
-        await update.message.reply_text("⚠️ No translations available. Make sure BIBLE_API_KEY is set.")
+        await context.bot.send_message(update.effective_chat.id, "⚠️ No translations available. Make sure BIBLE_API_KEY is set.")
         return
 
     current = _get_translation(update.effective_user.id)
@@ -872,7 +871,7 @@ async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )]
         for b in bibles
     ]
-    await update.message.reply_text(
+    await context.bot.send_message(update.effective_chat.id, 
         f"Choose your Bible translation \\(current: *{_escape(current)}*\\):",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN_V2,
@@ -920,7 +919,7 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = db.get_user(user_id)
         daily_time = user.get("daily_time") if user else None
         status = f"*{_escape(daily_time)} \\({_escape(tz_name)}\\)*" if daily_time else "*Off*"
-        await update.message.reply_text(
+        await context.bot.send_message(update.effective_chat.id, 
             f"📅 Daily study is currently {status}\\.\n\n"
             "Usage:\n"
             "`/schedule 8:00` — set time \\& enable\n"
@@ -942,18 +941,18 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         jobs = context.job_queue.get_jobs_by_name(f"daily_{user_id}")
         for job in jobs:
             job.schedule_removal()
-        await update.message.reply_text("🔕 Daily studies turned off.")
+        await context.bot.send_message(update.effective_chat.id, "🔕 Daily studies turned off.")
         return
 
     if arg == "on":
         user = db.get_user(user_id)
         daily_time = user.get("daily_time") if user else None
         if not daily_time:
-            await update.message.reply_text("⚠️ No time set. Use `/schedule 8:00` to set a time first.", parse_mode=ParseMode.MARKDOWN_V2)
+            await context.bot.send_message(update.effective_chat.id, "⚠️ No time set. Use `/schedule 8:00` to set a time first.", parse_mode=ParseMode.MARKDOWN_V2)
             return
         _schedule_daily_job(context, user_id, update.effective_chat.id, daily_time, tz_name)
         h, m = daily_time.split(":")
-        await update.message.reply_text(
+        await context.bot.send_message(update.effective_chat.id, 
             f"✅ Daily study re\\-enabled at *{_escape(daily_time)}* \\({_escape(tz_name)}\\)\\.",
             parse_mode=ParseMode.MARKDOWN_V2,
         )
@@ -966,14 +965,14 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             raise ValueError
     except (ValueError, IndexError):
-        await update.message.reply_text("⚠️ Invalid time. Use format like: /schedule 8:00 or /schedule 20:30")
+        await context.bot.send_message(update.effective_chat.id, "⚠️ Invalid time. Use format like: /schedule 8:00 or /schedule 20:30")
         return
 
     daily_time = f"{hour:02d}:{minute:02d}"
     db.upsert_user(user_id, daily_time=daily_time, chat_id=update.effective_chat.id)
     _schedule_daily_job(context, user_id, update.effective_chat.id, daily_time, tz_name)
 
-    await update.message.reply_text(
+    await context.bot.send_message(update.effective_chat.id, 
         f"✅ Daily study set for *{_escape(daily_time)}* \\({_escape(tz_name)}\\) every day\\.",
         parse_mode=ParseMode.MARKDOWN_V2,
     )
@@ -995,7 +994,7 @@ async def cmd_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(r, callback_data=f"tz_region:{r}")]
         for r in regions
     ]
-    await update.message.reply_text(
+    await context.bot.send_message(update.effective_chat.id, 
         f"🌍 Your current timezone: *{_escape(current_tz)}*\n\nSelect a region or keep your current setting:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN_V2,
@@ -1371,6 +1370,14 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Keep the chat tidy: remove the user's command / keyboard-button message."""
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+
 async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == "📖 Study":
@@ -1512,6 +1519,11 @@ def main():
         .post_init(post_init)
         .build()
     )
+
+    app.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & (filters.COMMAND | filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings)$")),
+        delete_command_message,
+    ), group=-1)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
