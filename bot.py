@@ -577,29 +577,37 @@ def _lk_chapter_keyboard(usfm: str, chapters: list, s: int, e: int) -> InlineKey
     return InlineKeyboardMarkup(rows)
 
 
-def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int) -> InlineKeyboardMarkup:
+def _lk_vnum(verses: list, idx: int) -> str:
+    return verses[idx].get("reference", "").split(":")[-1] or str(idx + 1)
+
+
+def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int,
+                       sel: tuple[int, int] | None = None) -> InlineKeyboardMarkup:
     groups = _lk_groups(verses, s, e)
     individual = (groups[0][0] == groups[0][1]) if groups else True
+    a, b = sel if sel else (-1, -1)
 
     if individual:
         buttons = [
             InlineKeyboardButton(
-                verses[i].get("reference", "").split(":")[-1] or str(i + 1),
-                callback_data=f"lk:v:{verses[i]['id']}"
+                ("✅" if a <= i <= b else "") + _lk_vnum(verses, i),
+                callback_data=f"lk:p:{chapter_id}:{i}:{a}:{b}:{s}:{e}",
             )
             for i, _ in groups
         ]
         rows = _lk_rows(buttons)
     else:
-        def _vnum(idx):
-            return verses[idx].get("reference", "").split(":")[-1] or str(idx + 1)
         rows = [
             [InlineKeyboardButton(
-                f"v{_vnum(gs)} – v{_vnum(ge)}",
-                callback_data=f"lk:vs:{usfm}:{chapter_id}:{gs}:{ge}"
+                f"v{_lk_vnum(verses, gs)} – v{_lk_vnum(verses, ge)}",
+                callback_data=f"lk:vs:{usfm}:{chapter_id}:{gs}:{ge}:{a}:{b}"
             )]
             for gs, ge in groups
         ]
+
+    if sel:
+        label = _lk_vnum(verses, a) if a == b else f"{_lk_vnum(verses, a)}-{_lk_vnum(verses, b)}"
+        rows.append([InlineKeyboardButton(f"🔍 Lookup {label}", callback_data=f"lk:go:{chapter_id}:{a}:{b}")])
 
     book_name = USFM_TO_NAME.get(usfm, usfm)
     rows.append([InlineKeyboardButton(f"« {book_name} — Chapters", callback_data=f"lk:back:ch:{usfm}:{chapter_id}")])
@@ -668,42 +676,75 @@ async def callback_lk_chapter(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-async def callback_lk_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """lk:vs:{usfm}:{chapter_id}:{s}:{e}"""
-    query = update.callback_query
-    await query.answer()
-    parts = query.data.split(":")
-    try:
-        usfm, chapter_id, s, e = parts[2], parts[3], int(parts[4]), int(parts[5])
-    except (ValueError, IndexError):
-        await query.answer("Invalid selection.", show_alert=True)
-        return
+LK_VERSE_PROMPT = "choose a verse or verses (tap one, then another for a range):"
 
+
+async def _lk_show_verses(query, usfm: str, chapter_id: str, s: int, e: int, sel):
     api_key = os.getenv("BIBLE_API_KEY", "")
     bible_id = await find_bible_id(_get_translation(query.from_user.id))
     if not bible_id or not api_key:
         await query.answer("Bible API not configured.", show_alert=True)
         return
-
     try:
         verses = await get_chapter_verses(bible_id, chapter_id, api_key)
     except Exception as ex:
         await query.answer(f"Error: {ex}", show_alert=True)
         return
 
-    if e == -1:
+    if e == -1 or e >= len(verses):
         e = len(verses) - 1
+    if sel and not (0 <= sel[0] <= sel[1] < len(verses)):
+        sel = None
 
     ch_num = chapter_id.split(".")[-1] if "." in chapter_id else chapter_id
     book_name = USFM_TO_NAME.get(usfm, usfm)
-    await query.edit_message_text(
-        f"📖 {book_name} {ch_num} — choose a verse:",
-        reply_markup=_lk_verse_keyboard(usfm, chapter_id, verses, s, e),
-    )
+    try:
+        await query.edit_message_text(
+            f"📖 {book_name} {ch_num} — {LK_VERSE_PROMPT}",
+            reply_markup=_lk_verse_keyboard(usfm, chapter_id, verses, s, e, sel),
+        )
+    except BadRequest:
+        pass
 
 
-async def callback_lk_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """lk:v:{verse_id}  e.g. lk:v:JHN.3.16"""
+async def callback_lk_verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lk:vs:{usfm}:{chapter_id}:{s}:{e}[:{sel_a}:{sel_b}]"""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":")
+    try:
+        usfm, chapter_id, s, e = parts[2], parts[3], int(parts[4]), int(parts[5])
+        a, b = (int(parts[6]), int(parts[7])) if len(parts) >= 8 else (-1, -1)
+    except (ValueError, IndexError):
+        await query.answer("Invalid selection.", show_alert=True)
+        return
+    await _lk_show_verses(query, usfm, chapter_id, s, e, (a, b) if a >= 0 else None)
+
+
+async def callback_lk_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lk:p:{chapter_id}:{i}:{a}:{b}:{s}:{e} — a verse was tapped; update the selection."""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":")
+    try:
+        chapter_id = parts[2]
+        i, a, b, s, e = (int(x) for x in parts[3:8])
+    except (ValueError, IndexError):
+        await query.answer("Invalid selection.", show_alert=True)
+        return
+
+    if a < 0:                      # nothing selected -> start
+        sel = (i, i)
+    elif a == b:                   # one selected -> range, or deselect if same verse
+        sel = None if i == a else (min(a, i), max(a, i))
+    else:                          # range selected -> start over
+        sel = (i, i)
+
+    await _lk_show_verses(query, chapter_id.split(".")[0], chapter_id, s, e, sel)
+
+
+async def callback_lk_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lk:go:{chapter_id}:{a}:{b} — look up the selected verse or range."""
     query = update.callback_query
     allowed, _ = db.check_rate_limit(
         query.from_user.id, limit=db.LOOKUP_RATE_LIMIT, window=db.LOOKUP_RATE_WINDOW, field="lookup_requests"
@@ -712,14 +753,32 @@ async def callback_lk_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("You've reached the lookup limit. Please try again later.", show_alert=True)
         return
     await query.answer()
-    verse_id = query.data[5:]  # strip "lk:v:"
 
-    # Convert verse_id (JHN.3.16) to reference (John 3:16)
-    parts = verse_id.split(".")
-    usfm = parts[0]
-    reference = f"{USFM_TO_NAME.get(usfm, usfm)} {'.'.join(parts[1:]).replace('.', ':')}"
+    parts = query.data.split(":")
+    try:
+        chapter_id, a, b = parts[2], int(parts[3]), int(parts[4])
+    except (ValueError, IndexError):
+        await query.answer("Invalid selection.", show_alert=True)
+        return
 
+    api_key = os.getenv("BIBLE_API_KEY", "")
     translation = _get_translation(query.from_user.id)
+    bible_id = await find_bible_id(translation)
+    if not bible_id or not api_key:
+        await query.answer("Bible API not configured.", show_alert=True)
+        return
+    try:
+        verses = await get_chapter_verses(bible_id, chapter_id, api_key)
+        if not (0 <= a <= b < len(verses)):
+            raise ValueError("selection out of range")
+    except Exception as ex:
+        await query.answer(f"Error: {ex}", show_alert=True)
+        return
+
+    usfm, ch_num = chapter_id.split(".")[0], chapter_id.split(".")[-1]
+    first, last = _lk_vnum(verses, a), _lk_vnum(verses, b)
+    verse_part = first if a == b else f"{first}-{last}"
+    reference = f"{USFM_TO_NAME.get(usfm, usfm)} {ch_num}:{verse_part}"
     chat_id = query.message.chat_id
 
     await query.edit_message_text(f"🔍 Looking up {reference}...")
@@ -729,9 +788,7 @@ async def callback_lk_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"⚠️ Couldn't find that passage: {e}")
         return
 
-    header = f"*{_escape(passage['reference'])}* \\({_escape(_clean_translation_label(passage['translation']))}\\)\n\n"
-    text = f"{header}{_escape(passage['text'])}"
-    await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
+    await _send_verse_photo(context.bot, chat_id, passage, reply_markup=MAIN_KEYBOARD)
     try:
         await query.message.delete()
     except Exception:
@@ -1468,7 +1525,8 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_lk_book_group, pattern=r"^lk:bk:"))
     app.add_handler(CallbackQueryHandler(callback_lk_chapter,    pattern=r"^lk:ch:"))
     app.add_handler(CallbackQueryHandler(callback_lk_verse,      pattern=r"^lk:vs:"))
-    app.add_handler(CallbackQueryHandler(callback_lk_fetch,      pattern=r"^lk:v:"))
+    app.add_handler(CallbackQueryHandler(callback_lk_pick,       pattern=r"^lk:p:"))
+    app.add_handler(CallbackQueryHandler(callback_lk_go,         pattern=r"^lk:go:"))
     app.add_handler(CallbackQueryHandler(callback_lk_back,       pattern=r"^lk:back:"))
 
     app.add_handler(MessageHandler(
