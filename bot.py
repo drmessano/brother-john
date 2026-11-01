@@ -517,12 +517,17 @@ def _lk_rows(buttons: list, cols: int = LK_COLS) -> list[list]:
     return [buttons[i:i + cols] for i in range(0, len(buttons), cols)]
 
 
+def _lk_cancel_row() -> list:
+    return [InlineKeyboardButton("✖ Cancel", callback_data="lk:cancel")]
+
+
 def _lk_testament_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📜 Old Testament", callback_data="lk:t:O"),
             InlineKeyboardButton("✝️ New Testament", callback_data="lk:t:N"),
-        ]
+        ],
+        _lk_cancel_row(),
     ])
 
 
@@ -547,6 +552,7 @@ def _lk_book_keyboard(t: str, s: int, e: int) -> InlineKeyboardMarkup:
         ]
 
     rows.append([InlineKeyboardButton("« Testaments", callback_data="lk:back:t")])
+    rows.append(_lk_cancel_row())
     return InlineKeyboardMarkup(rows)
 
 
@@ -574,6 +580,7 @@ def _lk_chapter_keyboard(usfm: str, chapters: list, s: int, e: int) -> InlineKey
 
     book_name = USFM_TO_NAME.get(usfm, usfm)
     rows.append([InlineKeyboardButton(f"« {book_name}", callback_data=f"lk:back:bk:{usfm}")])
+    rows.append(_lk_cancel_row())
     return InlineKeyboardMarkup(rows)
 
 
@@ -606,12 +613,21 @@ def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int,
         ]
 
     if sel:
-        label = _lk_vnum(verses, a) if a == b else f"{_lk_vnum(verses, a)}-{_lk_vnum(verses, b)}"
-        rows.append([InlineKeyboardButton(f"🔍 Choose {label}", callback_data=f"lk:go:{chapter_id}:{a}:{b}")])
+        rows.append([InlineKeyboardButton("🔍 Continue", callback_data=f"lk:go:{chapter_id}:{a}:{b}")])
 
     book_name = USFM_TO_NAME.get(usfm, usfm)
     rows.append([InlineKeyboardButton(f"« {book_name} — Chapters", callback_data=f"lk:back:ch:{usfm}:{chapter_id}")])
+    rows.append(_lk_cancel_row())
     return InlineKeyboardMarkup(rows)
+
+
+async def callback_lk_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception:
+        await query.edit_message_text("Lookup cancelled.")
 
 
 async def callback_lk_testament(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1525,6 +1541,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_lk_book_group, pattern=r"^lk:bk:"))
     app.add_handler(CallbackQueryHandler(callback_lk_chapter,    pattern=r"^lk:ch:"))
     app.add_handler(CallbackQueryHandler(callback_lk_verse,      pattern=r"^lk:vs:"))
+    app.add_handler(CallbackQueryHandler(callback_lk_cancel,     pattern=r"^lk:cancel$"))
     app.add_handler(CallbackQueryHandler(callback_lk_pick,       pattern=r"^lk:p:"))
     app.add_handler(CallbackQueryHandler(callback_lk_go,         pattern=r"^lk:go:"))
     app.add_handler(CallbackQueryHandler(callback_lk_back,       pattern=r"^lk:back:"))
