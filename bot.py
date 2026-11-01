@@ -194,6 +194,10 @@ def _local_time_to_utc(hour: int, minute: int, tz_name: str) -> tuple[int, int]:
 # General helpers
 # ---------------------------------------------------------------------------
 
+def _cancel_row() -> list:
+    return [InlineKeyboardButton("✖ Cancel", callback_data="menu_cancel")]
+
+
 def _escape(text: str) -> str:
     for ch in r"\_*[]()~`>#+-=|{}.!":
         text = text.replace(ch, f"\\{ch}")
@@ -889,6 +893,15 @@ async def callback_lk_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def callback_menu_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception:
+        await query.edit_message_text("Cancelled.")
+
+
 async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(update.effective_chat.id, "🔍 Fetching available translations...")
     try:
@@ -908,7 +921,7 @@ async def cmd_translation(update: Update, context: ContextTypes.DEFAULT_TYPE):
             callback_data=f"set_translation:{b.get('abbreviation', b['id'])}"
         )]
         for b in bibles
-    ]
+    ] + [_cancel_row()]
     await context.bot.send_message(update.effective_chat.id, 
         f"Choose your Bible translation \\(current: *{_escape(current)}*\\):",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1031,7 +1044,7 @@ async def cmd_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ] + [
         [InlineKeyboardButton(r, callback_data=f"tz_region:{r}")]
         for r in regions
-    ]
+    ] + [_cancel_row()]
     await context.bot.send_message(update.effective_chat.id, 
         f"🌍 Your current timezone: *{_escape(current_tz)}*\n\nSelect a region or keep your current setting:",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1056,7 +1069,8 @@ async def callback_tz_region(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )]
         for tz in timezones
     ] + [
-        [InlineKeyboardButton("« Back to regions", callback_data="tz_back")]
+        [InlineKeyboardButton("« Back to regions", callback_data="tz_back")],
+        _cancel_row(),
     ]
     await query.edit_message_text(
         f"Select a timezone in *{_escape(region)}*:",
@@ -1092,7 +1106,7 @@ async def callback_tz_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ] + [
         [InlineKeyboardButton(r, callback_data=f"tz_region:{r}")]
         for r in regions
-    ]
+    ] + [_cancel_row()]
     await query.edit_message_text(
         f"🌍 Your current timezone: *{_escape(current_tz)}*\n\nSelect a region or keep your current setting:",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1135,6 +1149,7 @@ async def _show_settings(reply_fn, user_id: int):
             InlineKeyboardButton(daily_toggle_label, callback_data="settings_daily_toggle"),
             InlineKeyboardButton("⏰ Change Time", callback_data="settings_daily_time"),
         ],
+        _cancel_row(),
     ])
 
     await reply_fn(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=keyboard)
@@ -1157,7 +1172,7 @@ async def callback_settings_translation(update: Update, context: ContextTypes.DE
             callback_data=f"set_translation:{b.get('abbreviation', b['id'])}"
         )]
         for b in bibles
-    ]
+    ] + [_cancel_row()]
     await query.edit_message_text(
         f"Choose your Bible translation \\(current: *{_escape(_clean_translation_label(current))}*\\):",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1175,7 +1190,7 @@ async def callback_settings_timezone(update: Update, context: ContextTypes.DEFAU
     ] + [
         [InlineKeyboardButton(r, callback_data=f"tz_region:{r}")]
         for r in regions
-    ]
+    ] + [_cancel_row()]
     await query.edit_message_text(
         f"🌍 Your current timezone: *{_escape(current_tz)}*\n\nSelect a region:",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1346,6 +1361,7 @@ async def _edit_settings_message(query, user_id: int):
             InlineKeyboardButton(daily_toggle_label, callback_data="settings_daily_toggle"),
             InlineKeyboardButton("⏰ Change Time", callback_data="settings_daily_time"),
         ],
+        _cancel_row(),
     ])
     await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=keyboard)
 
@@ -1592,6 +1608,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_lk_book_group, pattern=r"^lk:bk:"))
     app.add_handler(CallbackQueryHandler(callback_lk_chapter,    pattern=r"^lk:ch:"))
     app.add_handler(CallbackQueryHandler(callback_lk_verse,      pattern=r"^lk:vs:"))
+    app.add_handler(CallbackQueryHandler(callback_menu_cancel,   pattern=r"^menu_cancel$"))
     app.add_handler(CallbackQueryHandler(callback_lk_cancel,     pattern=r"^lk:cancel$"))
     app.add_handler(CallbackQueryHandler(callback_lk_pick,       pattern=r"^lk:p:"))
     app.add_handler(CallbackQueryHandler(callback_lk_go,         pattern=r"^lk:go:"))
