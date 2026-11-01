@@ -1227,7 +1227,7 @@ def _time_mode_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("AM/PM", callback_data="timepick:mode:ampm"),
             InlineKeyboardButton("24-Hour", callback_data="timepick:mode:24"),
         ],
-        [InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel")],
+        _cancel_row(),
     ])
 
 
@@ -1247,10 +1247,8 @@ def _time_hour_keyboard(mode: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(label, callback_data=f"timepick:h:{val}")
             for label, val in hours[i:i+6]
         ])
-    rows.append([
-        InlineKeyboardButton("« Back", callback_data="timepick:back:mode"),
-        InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel"),
-    ])
+    rows.append([InlineKeyboardButton("« Back", callback_data="timepick:back:mode")])
+    rows.append(_cancel_row())
     return InlineKeyboardMarkup(rows)
 
 
@@ -1263,10 +1261,8 @@ def _time_minute_keyboard(hour: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"{hour}:{m:02d}", callback_data=f"timepick:m:{hour}:{m}")
             for m in minutes[i:i+6]
         ])
-    rows.append([
-        InlineKeyboardButton("« Back", callback_data="timepick:back:hour"),
-        InlineKeyboardButton("✖ Cancel", callback_data="timepick:cancel"),
-    ])
+    rows.append([InlineKeyboardButton("« Back", callback_data="timepick:back:hour")])
+    rows.append(_cancel_row())
     return InlineKeyboardMarkup(rows)
 
 
@@ -1331,12 +1327,6 @@ async def callback_timepick_back(update: Update, context: ContextTypes.DEFAULT_T
     else:
         context.user_data.pop("timepick_mode", None)
         await query.edit_message_text("⏰ Choose a format for your daily study time:", reply_markup=_time_mode_keyboard())
-
-
-async def callback_timepick_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await _edit_settings_message(query, query.from_user.id)
 
 
 async def _edit_settings_message(query, user_id: int):
@@ -1603,7 +1593,6 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_timepick_hour,   pattern=r"^timepick:h:"))
     app.add_handler(CallbackQueryHandler(callback_timepick_minute, pattern=r"^timepick:m:"))
     app.add_handler(CallbackQueryHandler(callback_timepick_back,   pattern=r"^timepick:back:"))
-    app.add_handler(CallbackQueryHandler(callback_timepick_cancel, pattern=r"^timepick:cancel$"))
     app.add_handler(CallbackQueryHandler(callback_lk_testament,  pattern=r"^lk:t:"))
     app.add_handler(CallbackQueryHandler(callback_lk_book_group, pattern=r"^lk:bk:"))
     app.add_handler(CallbackQueryHandler(callback_lk_chapter,    pattern=r"^lk:ch:"))
