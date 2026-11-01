@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, available_timezones
 from dotenv import load_dotenv
 load_dotenv("config")
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, BotCommand, LabeledPrice
 from telegram.error import Forbidden, BadRequest
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -19,6 +19,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    PreCheckoutQueryHandler,
     filters,
 )
 
@@ -57,7 +58,7 @@ DEFAULT_TZ = "America/New_York"
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["📖 Study", "📅 Daily", "🔍 Lookup"],
-        ["⚙️ Settings"],
+        ["⚙️ Settings", "💝 Donate"],
     ],
     resize_keyboard=True,
 )
@@ -1398,6 +1399,62 @@ async def _daily_job(context: ContextTypes.DEFAULT_TYPE):
 # Misc handlers
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Donations (Telegram Stars)
+# ---------------------------------------------------------------------------
+
+DONATION_AMOUNTS = [25, 50, 100, 250, 500]
+
+
+async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = [[InlineKeyboardButton(f"⭐ {n}", callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[:3]],
+            [InlineKeyboardButton(f"⭐ {n}", callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[3:]],
+            _cancel_row()]
+    await context.bot.send_message(
+        update.effective_chat.id,
+        "💝 *Support Brother John*\n\n"
+        "Brother John is free to use\. If it blesses you, you can help cover "
+        "the costs of running it with a gift of Telegram Stars\. Choose an amount:",
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def callback_donate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    amount = int(query.data.split(":")[1])
+    if amount not in DONATION_AMOUNTS:
+        return
+    await query.message.delete()
+    await context.bot.send_invoice(
+        chat_id=query.message.chat_id,
+        title="Support Brother John",
+        description="A gift to help keep Brother John running. Thank you!",
+        payload=f"donation:{amount}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice("Donation", amount)],
+    )
+
+
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=True)
+
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.message.successful_payment
+    logger.info("Donation: %s %s from user %s", payment.total_amount, payment.currency, update.effective_user.id)
+    await context.bot.send_message(
+        update.effective_chat.id,
+        "🙏 Thank you for your gift! May God bless you.\n\n"
+        "_\"Each of you should give what you have decided in your heart to give, "
+        "not reluctantly or under compulsion, for God loves a cheerful giver.\" — 2 Corinthians 9:7_",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=MAIN_KEYBOARD,
+    )
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
@@ -1433,6 +1490,8 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
         await _lk_send_menu(context, update.effective_chat.id)
     elif text == "⚙️ Settings":
         await cmd_settings(update, context)
+    elif text == "💝 Donate":
+        await cmd_donate(update, context)
 
 
 # ---------------------------------------------------------------------------
@@ -1524,6 +1583,7 @@ async def post_init(app: Application):
         BotCommand("lookup",   "Look up a passage, e.g. /lookup John 3:16"),
         BotCommand("schedule", "Manage daily schedule: /schedule 8:00 | on | off | timezone"),
         BotCommand("settings", "View and change your settings"),
+        BotCommand("donate",   "Support Brother John with Telegram Stars"),
         BotCommand("help",     "Show help"),
     ])
     logger.info("Bot commands registered")
@@ -1567,7 +1627,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(callback_lk_touch, pattern=r"^lk:(?!cancel$|go:)"), group=-1)
     app.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & (filters.COMMAND | filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings)$")),
+        filters.ChatType.PRIVATE & (filters.COMMAND | filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings|💝 Donate)$")),
         delete_command_message,
     ), group=-1)
 
@@ -1578,6 +1638,10 @@ def main():
     app.add_handler(CommandHandler("lookup", cmd_lookup))
     app.add_handler(CommandHandler("schedule", cmd_schedule))
     app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("donate", cmd_donate))
+    app.add_handler(CallbackQueryHandler(callback_donate, pattern=r"^donate:"))
+    app.add_handler(PreCheckoutQueryHandler(precheckout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.add_handler(CommandHandler("translation", cmd_translation))
     app.add_handler(CommandHandler("timezone", cmd_timezone))
 
@@ -1605,7 +1669,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_lk_back,       pattern=r"^lk:back:"))
 
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings)$"),
+        filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings|💝 Donate)$"),
         handle_keyboard_button,
     ))
 
