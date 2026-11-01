@@ -450,11 +450,7 @@ async def cmd_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     if not context.args:
-        await context.bot.send_message(
-            chat_id,
-            "📖 Choose a passage:",
-            reply_markup=_lk_testament_keyboard(),
-        )
+        await _lk_send_menu(context, chat_id)
         return
 
     allowed, _ = db.check_rate_limit(
@@ -620,9 +616,50 @@ def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int,
     return InlineKeyboardMarkup(rows)
 
 
+LK_MENU_TTL = 60 * 60  # seconds of inactivity before an open picker menu is deleted
+
+
+def _lk_job_name(chat_id: int, message_id: int) -> str:
+    return f"lk-expire-{chat_id}-{message_id}"
+
+
+async def _lk_expire(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await context.bot.delete_message(context.job.chat_id, context.job.data)
+    except Exception:
+        pass
+
+
+def _lk_untrack(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    for job in context.job_queue.get_jobs_by_name(_lk_job_name(chat_id, message_id)):
+        job.schedule_removal()
+
+
+def _lk_touch(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    """(Re)start the inactivity timer for a picker menu message."""
+    _lk_untrack(context, chat_id, message_id)
+    context.job_queue.run_once(
+        _lk_expire, LK_MENU_TTL, data=message_id, chat_id=chat_id,
+        name=_lk_job_name(chat_id, message_id),
+    )
+
+
+async def _lk_send_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    msg = await context.bot.send_message(chat_id, "📖 Choose a passage:", reply_markup=_lk_testament_keyboard())
+    _lk_touch(context, chat_id, msg.message_id)
+
+
+async def callback_lk_touch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Any picker tap other than cancel/go resets the menu's inactivity timer."""
+    msg = update.callback_query.message
+    if msg:
+        _lk_touch(context, msg.chat_id, msg.message_id)
+
+
 async def callback_lk_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    _lk_untrack(context, query.message.chat_id, query.message.message_id)
     try:
         await query.message.delete()
     except Exception:
@@ -795,6 +832,7 @@ async def callback_lk_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
     verse_part = first if a == b else f"{first}-{last}"
     reference = f"{USFM_TO_NAME.get(usfm, usfm)} {ch_num}:{verse_part}"
     chat_id = query.message.chat_id
+    _lk_untrack(context, chat_id, query.message.message_id)
 
     await query.edit_message_text(f"🔍 Looking up {reference}...")
     try:
@@ -1385,7 +1423,7 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
     elif text == "📅 Daily":
         await cmd_daily(update, context)
     elif text == "🔍 Lookup":
-        await context.bot.send_message(update.effective_chat.id, "📖 Choose a passage:", reply_markup=_lk_testament_keyboard())
+        await _lk_send_menu(context, update.effective_chat.id)
     elif text == "⚙️ Settings":
         await cmd_settings(update, context)
 
@@ -1520,6 +1558,7 @@ def main():
         .build()
     )
 
+    app.add_handler(CallbackQueryHandler(callback_lk_touch, pattern=r"^lk:(?!cancel$|go:)"), group=-1)
     app.add_handler(MessageHandler(
         filters.ChatType.PRIVATE & (filters.COMMAND | filters.Regex(r"^(📖 Study|📅 Daily|🔍 Lookup|⚙️ Settings)$")),
         delete_command_message,
