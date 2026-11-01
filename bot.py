@@ -590,7 +590,7 @@ def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int,
     if individual:
         buttons = [
             InlineKeyboardButton(
-                ("✅" if a <= i <= b else "") + _lk_vnum(verses, i),
+                f"[{_lk_vnum(verses, i)}]" if a <= i <= b else _lk_vnum(verses, i),
                 callback_data=f"lk:p:{chapter_id}:{i}:{a}:{b}:{s}:{e}",
             )
             for i, _ in groups
@@ -607,7 +607,7 @@ def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int,
 
     if sel:
         label = _lk_vnum(verses, a) if a == b else f"{_lk_vnum(verses, a)}-{_lk_vnum(verses, b)}"
-        rows.append([InlineKeyboardButton(f"🔍 Lookup {label}", callback_data=f"lk:go:{chapter_id}:{a}:{b}")])
+        rows.append([InlineKeyboardButton(f"🔍 Choose {label}", callback_data=f"lk:go:{chapter_id}:{a}:{b}")])
 
     book_name = USFM_TO_NAME.get(usfm, usfm)
     rows.append([InlineKeyboardButton(f"« {book_name} — Chapters", callback_data=f"lk:back:ch:{usfm}:{chapter_id}")])
