@@ -1403,7 +1403,7 @@ async def _daily_job(context: ContextTypes.DEFAULT_TYPE):
 # Donations (Telegram Stars)
 # ---------------------------------------------------------------------------
 
-DONATION_AMOUNTS = [25, 50, 100, 250, 500]
+DONATION_AMOUNTS = [100, 250, 500, 1000]
 STAR_USD = 0.02   # approximate retail price of one Star
 
 
@@ -1413,8 +1413,8 @@ def _donation_label(n: int) -> str:
 
 
 async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = [[InlineKeyboardButton(_donation_label(n), callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[:3]],
-            [InlineKeyboardButton(_donation_label(n), callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[3:]],
+    rows = [[InlineKeyboardButton(_donation_label(n), callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[:2]],
+            [InlineKeyboardButton(_donation_label(n), callback_data=f"donate:{n}") for n in DONATION_AMOUNTS[2:]],
             _cancel_row()]
     await context.bot.send_message(
         update.effective_chat.id,
