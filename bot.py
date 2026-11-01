@@ -97,7 +97,7 @@ def _load_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
-    words = text.split()
+    words = [w for w in text.split(" ") if w]  # split on plain spaces only so a verse number stays glued to its first word
     lines = []
     current = ""
     for word in words:

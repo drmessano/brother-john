@@ -294,7 +294,7 @@ def _strip_html(html: str) -> str:
     # Keep verse numbers inline as superscripts, like a printed Bible
     html = re.sub(
         r'<span[^>]+data-number="[^"]*"[^>]*>([\d\-,]+)</span>\s*',
-        lambda m: f" {_superscript(m.group(1))}",
+        lambda m: f" {_superscript(m.group(1))}\u00a0",
         html,
     )
     # Replace block-level tags with a space so adjacent words don't run together
@@ -302,7 +302,7 @@ def _strip_html(html: str) -> str:
     # Remove all remaining tags
     text = re.sub(r"<[^>]+>", "", html)
     # Collapse whitespace
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[ \t\r\n\f\v]+", " ", text)
     return text.strip()
 
 
