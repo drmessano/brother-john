@@ -616,7 +616,7 @@ def _lk_verse_keyboard(usfm: str, chapter_id: str, verses: list, s: int, e: int,
     return InlineKeyboardMarkup(rows)
 
 
-LK_MENU_TTL = 60 * 60  # seconds of inactivity before an open picker menu is deleted
+LK_MENU_TTL = 5 * 60  # seconds of inactivity before an open picker menu is deleted
 
 
 def _lk_job_name(chat_id: int, message_id: int) -> str:
